@@ -8,6 +8,8 @@ from typing import Literal, NamedTuple, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_validator, model_validator
 
+from frame_math import compute_num_frames
+
 NonEmptyPrompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 ModelCheckpointID = Literal[
     "ltx-2.3-22b-distilled",
@@ -399,6 +401,8 @@ class LTXOfferingCapabilitiesSpec(BaseModel):
     ic_lora: bool
     retake: bool
     extend: bool
+    multi_keyframe: bool
+    multi_keyframe_max_count: int
     user_loras: bool
     camera_motion: bool
     auto_duration: bool
@@ -441,6 +445,16 @@ class LoraEntry(BaseModel):
     scale: float = Field(default=1.0, ge=0.0, le=4.0)
 
 
+class KeyframeInput(BaseModel):
+    """CamelCase of LTXV keyframe-edit `{image_uri, frame_index, strength}`."""
+
+    model_config = ConfigDict(strict=True)
+
+    imagePath: str
+    frameIndex: int = Field(ge=0)
+    strength: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
 class GenerateVideoRequest(BaseModel):
     model_config = ConfigDict(strict=True)
 
@@ -454,6 +468,8 @@ class GenerateVideoRequest(BaseModel):
     fps: LTXVideoGenFps = 24
     audio: bool = False
     imagePath: str | None = None
+    lastImagePath: str | None = None
+    keyframes: list[KeyframeInput] = Field(default_factory=list[KeyframeInput])
     audioPath: str | None = None
     aspectRatio: Literal["16:9", "9:16"] = "16:9"
     seed: int | None = None
@@ -1020,7 +1036,9 @@ class EnhancePromptRequest(BaseModel):
     surfaces — a request never carries more than one of loraCatalogIds/icLoraId/conditioningType.
     """
     model_config = ConfigDict(strict=True)
-    prompt: NonEmptyPrompt
+    # Empty is allowed when imagePath or keyframes are set — the rewrite is then captioned
+    # from the attached frame(s), plus any extra text the user did type.
+    prompt: str
     loraCatalogIds: list[str] = Field(default_factory=list)
     icLoraId: str | None = None
     # Set only for the built-in (non-catalog) "bring your own IC-LoRA" canny/depth conditioning
@@ -1029,6 +1047,14 @@ class EnhancePromptRequest(BaseModel):
     # catalog IC-LoRA's template-fill path gets, instead of Gemma's default free-rewrite prompt.
     conditioningType: Literal["canny", "depth"] | None = None
     imagePath: str | None = None
+    lastImagePath: str | None = None
+    # Same shape as GenerateVideoRequest.keyframes. Mutually exclusive with imagePath/
+    # lastImagePath — middle markers have nowhere to go on the two-slot i2v path.
+    keyframes: list[KeyframeInput] = Field(default_factory=list[KeyframeInput])
+    # Optional clip timing for multi-keyframe enhance: the rewriter needs duration/fps
+    # and each still's clock time on the user turn. Ignored for t2v/first-last/image.
+    duration: int | None = Field(default=None, gt=0)
+    fps: int | None = Field(default=None, gt=0)
     # "local" runs the on-device Gemma text encoder (default, matches every existing caller);
     # "api" calls Gemini's hosted API instead — no local checkpoint required, gated on
     # AppSettings.gemini_api_key being set.
@@ -1047,6 +1073,30 @@ class EnhancePromptRequest(BaseModel):
             raise ValueError("loraCatalogIds, icLoraId, and conditioningType are mutually exclusive")
         if self.mediaType == "image" and sum(selected) > 0:
             raise ValueError("loraCatalogIds, icLoraId, and conditioningType only apply to mediaType='video'")
+        has_first = bool((self.imagePath or "").strip())
+        has_last = bool((self.lastImagePath or "").strip())
+        has_keyframes = bool(self.keyframes)
+        if self.mediaType == "image" and has_keyframes:
+            raise ValueError("keyframes only apply to mediaType='video'")
+        if has_keyframes and (has_first or has_last):
+            raise ValueError("Keyframes cannot be combined with a first or last frame")
+        if has_last and not has_first:
+            raise ValueError("Last frame requires a first-frame image")
+        if has_keyframes:
+            if len(self.keyframes) > 5:
+                raise ValueError("You can place up to 5 keyframes")
+            indices = [keyframe.frameIndex for keyframe in self.keyframes]
+            if len(set(indices)) != len(indices):
+                raise ValueError("Keyframe frame indices must be unique")
+            if self.duration is not None and self.fps is not None and self.fps > 0:
+                last_frame = compute_num_frames(self.duration, self.fps) - 1
+                for frame_idx in indices:
+                    if frame_idx > last_frame:
+                        raise ValueError(
+                            f"Keyframe frame index {frame_idx} is outside 0..{last_frame}"
+                        )
+        if not self.prompt.strip() and not has_first and not has_keyframes:
+            raise ValueError("Prompt is required unless an image is provided")
         return self
 
 

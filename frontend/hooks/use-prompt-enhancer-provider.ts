@@ -7,19 +7,18 @@ export type EnhanceProvider = 'local' | 'api'
 interface UsePromptEnhancerProviderResult {
   // Local requires the Gemma text-encoder checkpoint to be downloaded AND local generation to
   // actually be usable this run (e.g. not memory-constrained into API-only mode); API requires a
-  // stored Gemini key (presence only — an invalid key still surfaces via the enhance call's own
-  // error response, so no separate validity check is worth the extra backend round-trip).
+  // stored Gemini key to actually run, but the option stays selectable without one so Enhance
+  // can send the user to Settings instead of hiding the choice.
   hasLocalTextEncoder: boolean
   hasGeminiApiKey: boolean
-  // Whether at least one provider is usable.
-  isAvailable: boolean
   // The provider Enhance will actually use: the persisted preference when it's currently
-  // available, otherwise whichever single option works right now. A provider that's temporarily
-  // unavailable (e.g. local on a memory-constrained run) falls back silently — it does NOT
-  // overwrite the persisted preference, which only an explicit setProviderPreference call changes.
+  // choosable. API remains choosable without a key (clicking Enhance then opens Settings).
+  // Local that's temporarily unavailable (e.g. memory-constrained run) falls back silently —
+  // it does NOT overwrite the persisted preference, which only an explicit setProviderPreference
+  // call changes.
   provider: EnhanceProvider
-  // Only true (and thus only worth showing a picker for) when the user actually has a choice
-  // between two currently-usable providers.
+  // Shown when local Enhance is available, so the user can still pick API (Gemini) before
+  // they've added a key. Hidden when local isn't an option — the button is already API-only.
   canToggleProvider: boolean
   setProviderPreference: (provider: EnhanceProvider) => void
 }
@@ -58,12 +57,13 @@ export function usePromptEnhancerProvider(enabled: boolean): UsePromptEnhancerPr
   // also folds in the user's own preference to use the LTX API for VIDEO specifically — that's
   // unrelated to whether the much smaller Gemma text encoder can run locally right now).
   const hasLocalTextEncoder = isLocalEncoderUsable && !forceApiGenerations
-  const canToggleProvider = hasLocalTextEncoder && hasGeminiApiKey
+  const canToggleProvider = hasLocalTextEncoder
 
-  // Default to local (the first available option) when the user hasn't made an explicit choice,
-  // or when their choice isn't currently usable — a silent, non-persisted fallback.
+  // Default to local when the user hasn't made an explicit choice, or when they asked for
+  // local and it's currently usable. API preference is honored even without a Gemini key so
+  // the Enhance (API) option isn't silently replaced by local.
   const provider: EnhanceProvider =
-    promptEnhancerProviderPreference === 'api' && hasGeminiApiKey ? 'api'
+    promptEnhancerProviderPreference === 'api' ? 'api'
     : promptEnhancerProviderPreference === 'local' && hasLocalTextEncoder ? 'local'
     : hasLocalTextEncoder ? 'local'
     : 'api'
@@ -75,7 +75,6 @@ export function usePromptEnhancerProvider(enabled: boolean): UsePromptEnhancerPr
   return {
     hasLocalTextEncoder,
     hasGeminiApiKey,
-    isAvailable: hasLocalTextEncoder || hasGeminiApiKey,
     provider,
     canToggleProvider,
     setProviderPreference,

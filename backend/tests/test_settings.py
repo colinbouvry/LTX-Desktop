@@ -453,6 +453,10 @@ def test_resolve_gemini_model(stored: str, expected: str) -> None:
     assert resolve_gemini_model(stored) == expected
 
 
+def test_default_gemini_model_is_not_a_known_deprecated_id() -> None:
+    assert DEFAULT_GEMINI_MODEL not in {"gemini-2.5-flash-lite"}
+
+
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
@@ -463,6 +467,7 @@ def test_resolve_gemini_model(stored: str, expected: str) -> None:
         ("gemini-2.0-flash", None),
         ("gemini-3-flash-preview", {"thinkingLevel": "LOW"}),
         ("gemini-3.1-pro-preview", {"thinkingLevel": "LOW"}),
+        ("gemini-3.5-flash-lite", {"thinkingLevel": "LOW"}),
     ],
 )
 def test_gemini_thinking_config_for_model(model: str, expected: dict[str, object] | None) -> None:
@@ -560,6 +565,7 @@ class TestListGeminiModels:
                             display_name="Gemini 2.0 Flash-Lite",
                         ),
                         _gemini_listed_model("models/gemini-2.5-flash-lite"),
+                        _gemini_listed_model("models/gemini-3.5-flash-lite"),
                         _gemini_listed_model("models/gemini-1.5-pro", display_name="Gemini 1.5 Pro"),
                         _gemini_listed_model(
                             "models/gemini-2.5-flash-preview-tts",
@@ -628,6 +634,7 @@ class TestListGeminiModels:
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
             "gemini-3-flash-preview",
+            "gemini-3.5-flash-lite",
             "gemini-1.5-pro",
             "gemini-2.5-pro",
             "gemini-pro",
@@ -757,7 +764,7 @@ class TestListGeminiModels:
         r = client.get("/api/settings/gemini-models")
         assert r.status_code == 200
         ids = [model["id"] for model in r.json()["models"]]
-        assert ids == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        assert ids == ["gemini-2.5-flash", "gemini-2.5-flash-lite", DEFAULT_GEMINI_MODEL]
         assert len(test_state.http.calls) == 2
         assert "pageToken=page-2" in test_state.http.calls[1].url
 
@@ -813,9 +820,12 @@ class TestListGeminiModels:
         assert second.status_code == 200
         assert [model["id"] for model in first.json()["models"]] == [
             "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            DEFAULT_GEMINI_MODEL,
         ]
-        assert [model["id"] for model in second.json()["models"]] == ["gemini-2.5-flash-lite"]
+        assert [model["id"] for model in second.json()["models"]] == [
+            "gemini-2.5-flash-lite",
+            DEFAULT_GEMINI_MODEL,
+        ]
         assert len(test_state.http.calls) == 2
 
     def test_included_missing_id_is_not_written_into_the_cache(self, client, test_state):
@@ -850,5 +860,8 @@ class TestListGeminiModels:
         assert client.get("/api/settings/gemini-models").status_code == 403
         ok = client.get("/api/settings/gemini-models")
         assert ok.status_code == 200
-        assert [model["id"] for model in ok.json()["models"]] == ["gemini-2.5-flash-lite"]
+        assert [model["id"] for model in ok.json()["models"]] == [
+            "gemini-2.5-flash-lite",
+            DEFAULT_GEMINI_MODEL,
+        ]
         assert len(test_state.http.calls) == 2

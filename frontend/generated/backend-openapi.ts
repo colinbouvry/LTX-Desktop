@@ -933,10 +933,18 @@ export interface components {
         EnhancePromptRequest: {
             /** Conditioningtype */
             conditioningType?: ("canny" | "depth") | null;
+            /** Duration */
+            duration?: number | null;
+            /** Fps */
+            fps?: number | null;
             /** Icloraid */
             icLoraId?: string | null;
             /** Imagepath */
             imagePath?: string | null;
+            /** Keyframes */
+            keyframes?: components["schemas"]["KeyframeInput"][];
+            /** Lastimagepath */
+            lastImagePath?: string | null;
             /** Loracatalogids */
             loraCatalogIds?: string[];
             /**
@@ -1112,6 +1120,10 @@ export interface components {
             fps: 24 | 25 | 48 | 50;
             /** Imagepath */
             imagePath?: string | null;
+            /** Keyframes */
+            keyframes?: components["schemas"]["KeyframeInput"][];
+            /** Lastimagepath */
+            lastImagePath?: string | null;
             /** Loras */
             loras?: components["schemas"]["LoraEntry"][];
             /**
@@ -1593,6 +1605,21 @@ export interface components {
         };
         JsonValue: unknown;
         /**
+         * KeyframeInput
+         * @description CamelCase of LTXV keyframe-edit `{image_uri, frame_index, strength}`.
+         */
+        KeyframeInput: {
+            /** Frameindex */
+            frameIndex: number;
+            /** Imagepath */
+            imagePath: string;
+            /**
+             * Strength
+             * @default 1
+             */
+            strength: number;
+        };
+        /**
          * LTXOfferingCapabilitiesSpec
          * @description Feature flags for one local model or API pipeline. Pixel maps stay backend-only.
          */
@@ -1609,6 +1636,10 @@ export interface components {
             i2v: boolean;
             /** Ic Lora */
             ic_lora: boolean;
+            /** Multi Keyframe */
+            multi_keyframe: boolean;
+            /** Multi Keyframe Max Count */
+            multi_keyframe_max_count: number;
             /** Retake */
             retake: boolean;
             /** T2V */

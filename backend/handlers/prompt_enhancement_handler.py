@@ -14,7 +14,7 @@ from handlers.base import StateHandlerBase
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.text_handler import TextHandler
-from server_utils.media_validation import validate_image_file
+from server_utils.media_validation import normalize_optional_path, validate_image_file
 from services.gemini_text_client import resolve_gemini_model
 from services.interfaces import PromptEnhancerPipeline
 from services.lora_catalog import LoraCatalogProvider
@@ -24,12 +24,14 @@ from services.prompt_enhancement import (
     build_ic_lora_enhancement_system_prompt,
     build_image_edit_system_prompt,
     build_image_generation_system_prompt,
+    build_keyframe_enhancement_system_prompt,
     build_lora_enhancement_system_prompt,
     build_template_fill_system_prompt,
     enforce_trigger_placements,
     fill_prompt_template,
     parse_template_fill_response,
 )
+from services.prompt_enhancement.i2v_frames import KeyframeStill
 from services.prompt_enhancer_pipeline.gemini_prompt_enhancer_pipeline import GeminiPromptEnhancerPipeline
 from services.services_utils import get_device_type
 from state.app_state_types import AppState
@@ -134,7 +136,14 @@ class PromptEnhancementHandler(StateHandlerBase):
         return self._run_free_rewrite(req, self._default_video_system_prompt(req), gemma_root)
 
     def _default_video_system_prompt(self, req: EnhancePromptRequest) -> str | None:
+        if req.keyframes:
+            return self._keyframe_system_prompt()
         return self._video_system_prompt(t2v=req.imagePath is None)
+
+    def _keyframe_system_prompt(self) -> str:
+        spec = self._text_handler.active_ltx_model_spec()
+        audio_visual = spec is not None and spec.wants_audio_visual_captions
+        return build_keyframe_enhancement_system_prompt(audio_visual=audio_visual)
 
     def _video_system_prompt(self, *, t2v: bool) -> str | None:
         """The active model's own caption style, or None to keep each provider's default.
@@ -147,7 +156,16 @@ class PromptEnhancementHandler(StateHandlerBase):
             return None
         return build_audio_visual_caption_system_prompt(t2v=t2v)
 
-    def enhance_for_generation(self, prompt: str, *, image_path: str | None) -> str:
+    def enhance_for_generation(
+        self,
+        prompt: str,
+        *,
+        image_path: str | None,
+        last_image_path: str | None = None,
+        keyframes: list[KeyframeStill] | None = None,
+        duration: int | None = None,
+        fps: int | None = None,
+    ) -> str:
         """Rewrite ``prompt`` on the local enhancer for a generation that's already started.
 
         Only for the local text-encoding path: API encoding enhances server-side inside the
@@ -167,11 +185,24 @@ class PromptEnhancementHandler(StateHandlerBase):
 
         try:
             pipeline = self._load_prompt_enhancer_pipeline(gemma_root)
-            system_prompt = self._video_system_prompt(t2v=image_path is None)
+            system_prompt = (
+                self._keyframe_system_prompt()
+                if keyframes
+                else self._video_system_prompt(t2v=image_path is None)
+            )
             seed = self._random_seed()
-            if image_path is not None:
+            if image_path is not None or keyframes:
+                first_path = image_path or (keyframes[0][0] if keyframes else None)
+                assert first_path is not None
                 enhanced = pipeline.enhance_i2v(
-                    prompt, image_path, system_prompt=system_prompt, seed=seed
+                    prompt,
+                    first_path,
+                    system_prompt=system_prompt,
+                    seed=seed,
+                    last_image_path=None if keyframes else last_image_path,
+                    keyframes=keyframes,
+                    duration=duration,
+                    fps=fps,
                 )
             else:
                 enhanced = pipeline.enhance_t2v(prompt, system_prompt=system_prompt, seed=seed)
@@ -213,22 +244,38 @@ class PromptEnhancementHandler(StateHandlerBase):
         # Reject an invalid/unreadable/oversized path before it reaches either provider — the
         # API path in particular would otherwise base64-encode and ship arbitrary file bytes to
         # a third-party API with no gate at all.
-        if req.imagePath is not None:
-            validate_image_file(req.imagePath)
+        keyframes = self._validated_keyframes(req)
+        image_path = (
+            None if keyframes else normalize_optional_path(req.imagePath)
+        )
+        last_image_path = (
+            None
+            if req.mediaType == "image" or keyframes
+            else normalize_optional_path(req.lastImagePath)
+        )
+        if image_path is not None:
+            validate_image_file(image_path)
+        if last_image_path is not None:
+            validate_image_file(last_image_path)
 
         seed = self._random_seed()
+        first_path = image_path or (keyframes[0][0] if keyframes else None)
         if req.provider == "api":
             resolved_model = resolve_gemini_model(self.state.app_settings.gemini_model)
             logger.info("Enhancing prompt via Gemini API (%s)", resolved_model)
             api_key = self.state.app_settings.gemini_api_key
-            if req.imagePath is not None:
+            if first_path is not None:
                 return self._gemini_pipeline.enhance_i2v(
                     req.prompt,
-                    req.imagePath,
+                    first_path,
                     system_prompt=system_prompt,
                     seed=seed,
                     api_key=api_key,
                     model=resolved_model,
+                    last_image_path=last_image_path,
+                    keyframes=keyframes,
+                    duration=req.duration,
+                    fps=req.fps,
                 )
             return self._gemini_pipeline.enhance_t2v(
                 req.prompt,
@@ -241,9 +288,31 @@ class PromptEnhancementHandler(StateHandlerBase):
         logger.info("Enhancing prompt via local Gemma")
         assert gemma_root is not None
         pipeline = self._load_prompt_enhancer_pipeline(gemma_root)
-        if req.imagePath is not None:
-            return pipeline.enhance_i2v(req.prompt, req.imagePath, system_prompt=system_prompt, seed=seed)
+        if first_path is not None:
+            return pipeline.enhance_i2v(
+                req.prompt,
+                first_path,
+                system_prompt=system_prompt,
+                seed=seed,
+                last_image_path=last_image_path,
+                keyframes=keyframes,
+                duration=req.duration,
+                fps=req.fps,
+            )
         return pipeline.enhance_t2v(req.prompt, system_prompt=system_prompt, seed=seed)
+
+    def _validated_keyframes(self, req: EnhancePromptRequest) -> list[KeyframeStill] | None:
+        if req.mediaType == "image" or not req.keyframes:
+            return None
+        frames: list[KeyframeStill] = []
+        for keyframe in req.keyframes:
+            path = normalize_optional_path(keyframe.imagePath)
+            if path is None:
+                raise HTTPError(400, "Each keyframe requires an image path")
+            validate_image_file(path)
+            frames.append((path, keyframe.frameIndex, keyframe.strength))
+        frames.sort(key=lambda item: item[1])
+        return frames
 
     def _run_template_fill(
         self, ic_lora: IcLoraCatalogItem, req: EnhancePromptRequest, gemma_root: str | None

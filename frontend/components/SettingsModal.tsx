@@ -12,10 +12,13 @@ import { useHfModelAccess } from '../hooks/use-hf-model-access'
 import type { AppUpdate } from '../hooks/use-app-update'
 import type { UpdateStatePayload } from '../../shared/electron-api-schema'
 
+export type SettingsInitialReason = 'geminiKeyRequired'
+
 interface SettingsModalProps {
   isOpen: boolean
   onClose: () => void
   initialTab?: TabId
+  initialReason?: SettingsInitialReason
   update: AppUpdate
   onOpenUpdate: () => void
   onCheckForUpdates: () => void
@@ -28,23 +31,46 @@ type TextEncodingCp = NonNullable<ApiSuccessOf<'getTextEncoderRecommendation'>['
 type GeminiModelOption = ApiSuccessOf<'listGeminiModels'>['models'][number]
 
 /** Focuses an API Keys tab input once the modal has switched to that tab.
- *  Shared by the LTX and FAL key inputs — each call gets its own ref/pending state. */
-function useApiKeyFocus(isOpen: boolean, activeTab: TabId, setActiveTab: (tab: TabId) => void) {
+ *  Shared by the LTX and FAL key inputs — each call gets its own ref/pending state.
+ *  Pass `sectionRef` + `containerRef` to scroll a whole section (e.g. Gemini heading + banner)
+ *  into the tab body; focus then uses preventScroll so the input doesn't yank the banner back
+ *  off-screen. */
+function useApiKeyFocus(
+  isOpen: boolean,
+  activeTab: TabId,
+  setActiveTab: (tab: TabId) => void,
+  sectionRef?: React.RefObject<HTMLElement | null>,
+  containerRef?: React.RefObject<HTMLElement | null>,
+) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [pending, setPending] = useState(false)
 
   useEffect(() => {
-    if (!isOpen || activeTab !== 'apiKeys' || !pending) return
+    if (!pending) return
+    // Closing the modal or leaving API Keys cancels the timeout below; drop `pending` so a
+    // later open can't replay scroll/focus that nobody requested this time.
+    if (!isOpen || activeTab !== 'apiKeys') {
+      setPending(false)
+      return
+    }
 
-    const frameId = window.requestAnimationFrame(() => {
-      inputRef.current?.focus()
-    })
-    setPending(false)
+    // Wait for the API Keys tab to paint before scrolling. Clearing `pending` in this
+    // effect body used to cancel the scheduled work on the very next render.
+    const timeoutId = window.setTimeout(() => {
+      const section = sectionRef?.current
+      const container = containerRef?.current
+      if (section && container) {
+        const top = container.scrollTop + section.getBoundingClientRect().top - container.getBoundingClientRect().top
+        container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+      }
+      inputRef.current?.focus({ preventScroll: sectionRef != null })
+      setPending(false)
+    }, sectionRef ? 100 : 0)
 
     return () => {
-      window.cancelAnimationFrame(frameId)
+      window.clearTimeout(timeoutId)
     }
-  }, [activeTab, pending, isOpen])
+  }, [activeTab, pending, isOpen, sectionRef, containerRef])
 
   const openAndFocus = () => {
     setActiveTab('apiKeys')
@@ -186,16 +212,19 @@ function aboutUpdateAction(
   }
 }
 
-export function SettingsModal({ isOpen, onClose, initialTab, update, onOpenUpdate, onCheckForUpdates }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, initialTab, initialReason, update, onOpenUpdate, onCheckForUpdates }: SettingsModalProps) {
   const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, refreshSettings, forceApiGenerations, cudaAvailable, notifyModelsChanged } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
+  const tabBodyRef = useRef<HTMLDivElement>(null)
+  const geminiSectionRef = useRef<HTMLDivElement>(null)
   const ltxApiKey = useApiKeyFocus(isOpen, activeTab, setActiveTab)
   const falApiKey = useApiKeyFocus(isOpen, activeTab, setActiveTab)
+  const geminiApiKey = useApiKeyFocus(isOpen, activeTab, setActiveTab, geminiSectionRef, tabBodyRef)
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
   const [falApiKeyInput, setFalApiKeyInput] = useState('')
   const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
-  const geminiApiKeyInputRef = useRef<HTMLInputElement>(null)
+  const showGeminiKeyBanner = initialReason === 'geminiKeyRequired'
   const [geminiModelOptions, setGeminiModelOptions] = useState<GeminiModelOption[]>([])
   const [resolvedGeminiModel, setResolvedGeminiModel] = useState(DEFAULT_GEMINI_MODEL)
   const geminiModelSaveSeq = useRef(0)
@@ -248,6 +277,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, update, onOpenUpdat
       setActiveTab(initialTab)
     }
   }, [isOpen, initialTab])
+
+  useEffect(() => {
+    if (isOpen && initialReason === 'geminiKeyRequired') {
+      geminiApiKey.openAndFocus()
+    }
+  }, [isOpen, initialReason])
 
   // The Models tab is hidden in force-API mode; don't let the selection get stuck there
   // (e.g. via initialTab or a stale value).
@@ -544,7 +579,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, update, onOpenUpdat
         </div>
 
         {/* Content */}
-        <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
+        <div ref={tabBodyRef} className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
             <>
               {/* Project Assets Path */}
@@ -1204,11 +1239,18 @@ export function SettingsModal({ isOpen, onClose, initialTab, update, onOpenUpdat
               </div>
 
               {/* Gemini API Key Section */}
-              <div className="space-y-4 pt-4 border-t border-zinc-800">
+              <div ref={geminiSectionRef} className="space-y-4 pt-4 border-t border-zinc-800 scroll-mt-2">
                 <div className="flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-purple-400" />
                   <h3 className="text-sm font-semibold text-white">Gemini API</h3>
                 </div>
+
+                {showGeminiKeyBanner && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <span>Add a Gemini API key to use Enhance (API).</span>
+                  </div>
+                )}
 
                 <p className="text-xs text-zinc-500 leading-relaxed">
                   Your Gemini API key is used for AI-powered prompt suggestions when filling timeline gaps, and for the Enhance (API) prompt enhancer.
@@ -1217,7 +1259,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, update, onOpenUpdat
                 <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
                   <div className="flex gap-2">
                     <input
-                      ref={geminiApiKeyInputRef}
+                      ref={geminiApiKey.inputRef}
                       type="password"
                       value={geminiApiKeyInput}
                       onChange={(e) => setGeminiApiKeyInput(e.target.value)}

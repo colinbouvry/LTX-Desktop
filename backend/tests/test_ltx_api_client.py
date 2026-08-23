@@ -106,7 +106,43 @@ def test_generate_image_to_video_with_image_uri_downloads_video() -> None:
     assert http.calls[0].json_payload is not None
     assert http.calls[0].json_payload["image_uri"] == "storage://image/123"
     assert http.calls[0].json_payload["camera_motion"] == "jib_up"
+    assert "last_frame_uri" not in http.calls[0].json_payload
     assert http.calls[1].url == "https://cdn.example.com/output.mp4"
+
+
+def test_generate_image_to_video_with_last_frame_uri() -> None:
+    http = FakeHTTPClient()
+    http.queue(
+        "post",
+        FakeResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            json_payload={"video_url": "https://cdn.example.com/output.mp4"},
+        ),
+    )
+    http.queue(
+        "get",
+        FakeResponse(status_code=200, content=b"downloaded-video"),
+    )
+
+    client = LTXAPIClientImpl(http=http, ltx_api_base_url="https://api.ltx.video")
+    out = client.generate_image_to_video(
+        api_key="test-key",
+        prompt="Animate from first to last",
+        image_uri="storage://image/123",
+        last_frame_uri="storage://image/456",
+        model="ltx-2-3-pro",
+        resolution="1920x1080",
+        duration=4.0,
+        fps=24.0,
+        generate_audio=True,
+        camera_motion="jib_up",
+    )
+
+    assert out == b"downloaded-video"
+    assert http.calls[0].json_payload is not None
+    assert http.calls[0].json_payload["image_uri"] == "storage://image/123"
+    assert http.calls[0].json_payload["last_frame_uri"] == "storage://image/456"
 
 
 def test_generate_text_to_video_omits_camera_motion_when_none() -> None:
@@ -291,6 +327,34 @@ def test_generate_audio_to_video_with_image_uri_posts_both_inputs() -> None:
     assert http.calls[0].json_payload["image_uri"] == "storage://image/456"
     assert http.calls[0].json_payload["model"] == "ltx-2-3-pro"
     assert http.calls[0].json_payload["resolution"] == "3840x2160"
+    assert "last_frame_uri" not in http.calls[0].json_payload
+
+
+def test_generate_audio_to_video_with_last_frame_uri() -> None:
+    http = FakeHTTPClient()
+    http.queue(
+        "post",
+        FakeResponse(
+            status_code=200,
+            headers={"Content-Type": "video/mp4"},
+            content=b"direct-a2v-video",
+        ),
+    )
+
+    client = LTXAPIClientImpl(http=http, ltx_api_base_url="https://api.ltx.video")
+    out = client.generate_audio_to_video(
+        api_key="test-key",
+        prompt="Animate from image and audio",
+        audio_uri="storage://audio/123",
+        image_uri="storage://image/456",
+        last_frame_uri="storage://image/789",
+        model="ltx-2-3-pro",
+        resolution="3840x2160",
+    )
+
+    assert out == b"direct-a2v-video"
+    assert http.calls[0].json_payload is not None
+    assert http.calls[0].json_payload["last_frame_uri"] == "storage://image/789"
 
 
 def test_generate_audio_to_video_raises_on_non_200() -> None:

@@ -82,6 +82,102 @@ def build_default_free_rewrite_system_prompt() -> str:
     )
 
 
+def _clip_timing_line(duration: int | float | None, fps: int | float | None) -> str | None:
+    # ponytail: both-or-neither; callers send duration+fps together
+    if duration is not None and duration > 0 and fps is not None and fps > 0:
+        return f"Clip: {duration:g} seconds at {fps} fps."
+    return None
+
+
+def build_i2v_user_prompt_text(
+    prompt: str,
+    *,
+    has_last: bool,
+    keyframe_count: int = 0,
+    duration: int | float | None = None,
+    fps: int | float | None = None,
+) -> str:
+    """User-turn text for an image-conditioned enhance call.
+
+    First-only with a typed prompt keeps the Gemma wording ``User Raw Input Prompt: …``.
+    Empty prompt + image(s) asks the VLM to caption from the frame(s) instead.
+    Multi-keyframe treats any typed text as extra instructions on top of the stills,
+    and prefixes clip duration/fps when the caller knows them.
+    """
+    stripped = prompt.strip()
+    interpolating = has_last or keyframe_count > 1
+    if keyframe_count > 0:
+        if stripped:
+            body = f"Extra user instructions: {stripped}"
+        else:
+            body = (
+                "No extra user instructions. Infer the connecting motion from the "
+                "keyframes in order."
+            )
+        clip = _clip_timing_line(duration, fps)
+        return f"{clip}\n{body}" if clip is not None else body
+    if not stripped:
+        if interpolating:
+            return (
+                "No user prompt. Write a video generation prompt that interpolates "
+                "from the first frame to the last."
+            )
+        return "No user prompt. Write a generation prompt from the attached frame."
+    if interpolating:
+        return f"User Raw Input Prompt: {stripped}."
+    return f"User Raw Input Prompt: {prompt}."
+
+
+# Multi-keyframe enhance is stills-as-ground-truth, not a t2v rewrite. Distilled from the
+# Atlas shot-control enhancer so interpolations stay identity-consistent and physically
+# continuous, while keeping this app's single-paragraph output contract (no JSON, no MM:SS.ff).
+_KEYFRAME_RULES = (
+    "You are writing a prompt for a multi-keyframe video model. The user turn contains "
+    "stills labeled by frame index, clock time, and lock strength, plus clip duration/fps "
+    "and optional extra user instructions.\n"
+    "The stills are visual ground truth. Each still's strength (0 to 1) is how tightly the "
+    "video must match that still at its time: 1 is a full lock on the visible state; lower "
+    "values allow more interpolation around that pose without changing the still's identity. "
+    "For each still, first describe that still's visible "
+    "state (pose, expression, staging, clothing as shown), then the connecting action that "
+    "gets from it to the next still. Do not invent a blend or compromise pose that is in none "
+    "of the stills. Do not guess wardrobe, accessories, or colors that a still does not show "
+    "— stay vague if they are unclear. At each labeled time the video must match that still: "
+    "same subject identity, setting, lighting, and composition. A person who shares core "
+    "appearance across stills is ONE person who moved — never a second copy.\n"
+    "Write a single continuous take that interpolates fluidly between the stills in time "
+    "order. Describe the physical action that connects each pose or position (walk, turn, "
+    "reach, sit) — never teleport. Keep constants (identity, persistent props, environment) "
+    "in consistent language. Invent in-between motion only when the stills imply it; do not "
+    "add characters, props, or locations that appear in no still and no extra instructions.\n"
+    "Place action in time with phrases like \"at the start\", \"by two seconds\", and "
+    "\"at the end\" when they help; do not emit JSON, MM:SS.ff timestamps, or a second "
+    "paragraph.\n"
+    "Extra user instructions, if present, supply narrative intent, pacing, and action "
+    "between frames. They must not override what a still shows at its time. If they conflict "
+    "with a still, keep the still's visible state and use the instructions only to shape "
+    "energy and the in-between motion. If there are no extra instructions, infer that "
+    "connecting motion from the stills alone.\n"
+    "If earlier instructions describe a single reference image or exact first frame, ignore "
+    "that framing: the user turn has labeled stills, each of which is visual ground truth at "
+    "its time. Start immediately with the opening visual. Use progressive verbs throughout. "
+    "No hard cuts."
+)
+
+
+def build_keyframe_enhancement_system_prompt(*, audio_visual: bool = False) -> str:
+    """System prompt for multi-keyframe enhance (local Gemma and Gemini).
+
+    2.3 is the keyframe rules alone. 2.5 keeps the model's native audio-visual caption
+    style and appends those rules — it does not replace the native caption instructions
+    with a shorter soundscape addendum.
+    """
+    rules = _KEYFRAME_RULES + " " + _OUTPUT_FORMAT_INSTRUCTION
+    if not audio_visual:
+        return rules
+    return build_audio_visual_caption_system_prompt(t2v=False) + "\n\n" + rules
+
+
 def build_audio_visual_caption_system_prompt(*, t2v: bool) -> str:
     """The captioning instructions LTX 2.5 itself ships with, for any enhancer provider.
 

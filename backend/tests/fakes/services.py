@@ -47,8 +47,11 @@ class FakeResponse:
     headers: dict[str, str] = field(default_factory=dict)
     content: bytes = b""
     json_payload: Any = field(default_factory=dict)
+    json_raises: bool = False
 
     def json(self) -> Any:
+        if self.json_raises:
+            raise ValueError("No JSON object could be decoded")
         return self.json_payload
 
 
@@ -216,12 +219,14 @@ class FakeLTXAPIClient:
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        last_frame_uri: str | None = None,
     ) -> bytes:
         self.image_to_video_calls.append(
             {
                 "api_key": api_key,
                 "prompt": prompt,
                 "image_uri": image_uri,
+                "last_frame_uri": last_frame_uri,
                 "model": model,
                 "resolution": resolution,
                 "duration": duration,
@@ -243,6 +248,7 @@ class FakeLTXAPIClient:
         image_uri: str | None,
         model: str,
         resolution: str,
+        last_frame_uri: str | None = None,
     ) -> bytes:
         self.audio_to_video_calls.append(
             {
@@ -250,6 +256,7 @@ class FakeLTXAPIClient:
                 "prompt": prompt,
                 "audio_uri": audio_uri,
                 "image_uri": image_uri,
+                "last_frame_uri": last_frame_uri,
                 "model": model,
                 "resolution": resolution,
             }
@@ -838,9 +845,28 @@ class FakePromptEnhancerPipeline:
             raise self.raise_on_enhance
         return self.enhanced_prompt
 
-    def enhance_i2v(self, prompt: str, image_path: str, system_prompt: str | None, seed: int) -> str:
+    def enhance_i2v(
+        self,
+        prompt: str,
+        image_path: str,
+        system_prompt: str | None,
+        seed: int,
+        last_image_path: str | None = None,
+        keyframes: list[tuple[str, int, float]] | None = None,
+        duration: int | None = None,
+        fps: int | None = None,
+    ) -> str:
         self.enhance_i2v_calls.append(
-            {"prompt": prompt, "image_path": image_path, "system_prompt": system_prompt, "seed": seed}
+            {
+                "prompt": prompt,
+                "image_path": image_path,
+                "last_image_path": last_image_path,
+                "keyframes": keyframes,
+                "duration": duration,
+                "fps": fps,
+                "system_prompt": system_prompt,
+                "seed": seed,
+            }
         )
         if self.raise_on_enhance is not None:
             raise self.raise_on_enhance

@@ -14,8 +14,11 @@ from api_types import (
     PromptTemplateSpec,
 )
 from services.prompt_enhancement import (
+    build_audio_visual_caption_system_prompt,
     build_conditioning_system_prompt,
+    build_i2v_user_prompt_text,
     build_ic_lora_enhancement_system_prompt,
+    build_keyframe_enhancement_system_prompt,
     build_lora_enhancement_system_prompt,
     build_template_fill_system_prompt,
     enforce_trigger_placement,
@@ -23,6 +26,7 @@ from services.prompt_enhancement import (
     fill_prompt_template,
     parse_template_fill_response,
     render_catalog_item_block,
+    resolve_i2v_frames,
 )
 
 
@@ -354,3 +358,157 @@ def test_conditioning_prompts_forbid_prefaces_and_markdown():
     for conditioning_type in ("canny", "depth"):
         prompt = build_conditioning_system_prompt(conditioning_type)
         assert "No titles, headings, prefaces" in prompt
+
+
+def test_i2v_user_text_keeps_first_only_wording():
+    assert build_i2v_user_prompt_text("a cat", has_last=False) == "User Raw Input Prompt: a cat."
+
+
+def test_i2v_user_text_empty_prompt_captions_from_frames():
+    assert "No user prompt" in build_i2v_user_prompt_text("", has_last=False)
+    assert "first frame to the last" in build_i2v_user_prompt_text("  ", has_last=True)
+
+
+def test_i2v_user_text_empty_prompt_interpolates_keyframes():
+    text = build_i2v_user_prompt_text("", has_last=False, keyframe_count=3)
+    assert "No extra user instructions" in text
+    assert "keyframes in order" in text
+
+
+def test_i2v_user_text_keyframes_treat_typed_prompt_as_extra_instructions():
+    assert (
+        build_i2v_user_prompt_text("walk slowly", has_last=False, keyframe_count=2)
+        == "Extra user instructions: walk slowly"
+    )
+
+
+def test_i2v_user_text_keyframes_include_clip_duration_and_fps():
+    text = build_i2v_user_prompt_text(
+        "walk slowly",
+        has_last=False,
+        keyframe_count=2,
+        duration=5,
+        fps=24,
+    )
+    assert text.startswith("Clip: 5 seconds at 24 fps.")
+    assert "Extra user instructions: walk slowly" in text
+
+
+def test_i2v_user_text_keyframes_empty_prompt_still_includes_clip():
+    text = build_i2v_user_prompt_text(
+        "",
+        has_last=False,
+        keyframe_count=3,
+        duration=5,
+        fps=24,
+    )
+    assert text.startswith("Clip: 5 seconds at 24 fps.")
+    assert "No extra user instructions" in text
+
+
+def test_i2v_user_text_omits_clip_line_for_non_positive_timing():
+    text = build_i2v_user_prompt_text(
+        "walk slowly",
+        has_last=False,
+        keyframe_count=2,
+        duration=0,
+        fps=0,
+    )
+    assert "Clip:" not in text
+    assert text == "Extra user instructions: walk slowly"
+
+
+def test_i2v_user_text_omits_clip_line_unless_duration_and_fps_are_both_positive():
+    seconds_only = build_i2v_user_prompt_text(
+        "walk slowly",
+        has_last=False,
+        keyframe_count=2,
+        duration=5,
+        fps=0,
+    )
+    fps_only = build_i2v_user_prompt_text(
+        "walk slowly",
+        has_last=False,
+        keyframe_count=2,
+        duration=-1,
+        fps=24,
+    )
+    assert "Clip:" not in seconds_only
+    assert "Clip:" not in fps_only
+
+
+def test_keyframe_system_prompt_treats_stills_as_ground_truth():
+    prompt = build_keyframe_enhancement_system_prompt()
+    assert "visual ground truth" in prompt
+    assert "strength (0 to 1)" in prompt
+    assert "full lock" in prompt.lower()
+    assert "extra user instructions" in prompt.lower()
+    assert "ONE person who moved" in prompt
+    assert "never teleport" in prompt
+    assert "ONLY the rewritten prompt" in prompt
+    assert "soundscape" not in prompt.lower()
+    assert "REFERENCE IMAGE" not in prompt
+    lowered = prompt.lower()
+    assert "blend" in lowered or "compromise" in lowered
+    assert "wardrobe" in lowered or "clothing" in lowered
+    assert "at the start" in lowered
+    assert "by two seconds" in lowered
+    assert "at the end" in lowered
+
+
+def test_keyframe_system_prompt_keeps_native_caption_style_when_audio_visual():
+    prompt = build_keyframe_enhancement_system_prompt(audio_visual=True)
+    native = build_audio_visual_caption_system_prompt(t2v=False)
+    assert prompt.startswith(native)
+    assert "visual ground truth" in prompt
+    assert "at the start" in prompt.lower()
+    assert "ONLY the rewritten prompt" in prompt
+
+
+def test_resolve_i2v_frames_single_image_is_unlabeled():
+    assert resolve_i2v_frames("/opening.png") == [("/opening.png", None)]
+
+
+def test_resolve_i2v_frames_first_and_last_keep_legacy_labels():
+    assert resolve_i2v_frames("/opening.png", "/closing.png") == [
+        ("/opening.png", "First frame:"),
+        ("/closing.png", "Last frame:"),
+    ]
+
+
+def test_resolve_i2v_frames_numbers_middle_markers():
+    assert resolve_i2v_frames(
+        "/unused.png",
+        keyframes=[("/closing.png", 80, 1.0), ("/opening.png", 0, 1.0), ("/middle.png", 40, 0.7)],
+    ) == [
+        ("/opening.png", "Keyframe 1: frame 0, strength 1."),
+        ("/middle.png", "Keyframe 2: frame 40, strength 0.7."),
+        ("/closing.png", "Keyframe 3: frame 80, strength 1."),
+    ]
+
+
+def test_resolve_i2v_frames_includes_clock_time_when_fps_is_known():
+    assert resolve_i2v_frames(
+        "/unused.png",
+        keyframes=[("/opening.png", 0, 1.0), ("/middle.png", 40, 0.7)],
+        fps=24,
+    ) == [
+        ("/opening.png", "Keyframe 1: frame 0 (0.00s), strength 1."),
+        ("/middle.png", "Keyframe 2: frame 40 (1.67s), strength 0.7."),
+    ]
+
+
+def test_resolve_i2v_frames_single_keyframe_is_unlabeled_without_fps():
+    assert resolve_i2v_frames("/unused.png", keyframes=[("/opening.png", 0, 1.0)]) == [
+        ("/opening.png", None),
+    ]
+
+
+def test_resolve_i2v_frames_single_keyframe_includes_clock_when_fps_is_known():
+    assert resolve_i2v_frames(
+        "/unused.png",
+        keyframes=[("/opening.png", 0, 1.0)],
+        fps=24,
+    ) == [
+        ("/opening.png", "Keyframe 1: frame 0 (0.00s), strength 1."),
+    ]

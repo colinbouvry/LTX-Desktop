@@ -4,6 +4,9 @@ import { ApiClient, type ApiRequestBodyOf, type ApiSuccessOf } from '../lib/api-
 import { createLocalGenerationError, type GenerationError } from '../lib/generation-errors'
 import { canCancelLocalJob, withGenerationActive } from '../lib/generation-active'
 import { useAppSettings } from '../contexts/AppSettingsContext'
+import { buildGenerateVideoImageInputs } from '../lib/build-generate-video-body'
+import type { GenSpaceMode } from '../lib/genspace-multi-keyframe'
+import type { KeyframeItem, PersistedKeyframe } from '../lib/multi-keyframe'
 
 const POLLING_INTERVAL_MS = 2000
 
@@ -22,7 +25,9 @@ export interface GenerationRecoveryContext {
   // re-resolved from whichever offering is selected when the job later finishes.
   modelLabel?: string
   inputImageUrl?: string
+  inputLastImageUrl?: string
   inputAudioUrl?: string
+  keyframes?: PersistedKeyframe[]
   genType?: 'image' | 'enhance'
   // Frozen at marker write (job start) — same rule as hook canCancel. Lets Stop survive a
   // UI refresh before the first progress poll returns (local GPU can starve that poll).
@@ -70,7 +75,14 @@ type GenerateVideoRequest = ApiRequestBodyOf<'generateVideo'>
 type GenerateImageRequest = ApiRequestBodyOf<'generateImage'>
 
 interface UseGenerationReturn extends GenerationState {
-  generate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null) => Promise<void>
+  generate: (
+    prompt: string,
+    imagePath: string | null,
+    settings: GenerationSettings,
+    audioPath?: string | null,
+    lastImagePath?: string | null,
+    imageInputs?: { mode: GenSpaceMode; keyframes: KeyframeItem[] },
+  ) => Promise<void>
   generateImage: (prompt: string, settings: GenerationSettings, editSource?: string | null) => Promise<void>
   cancel: () => void
   reset: () => void
@@ -213,6 +225,8 @@ export function useGeneration(): UseGenerationReturn {
     imagePath: string | null,
     settings: GenerationSettings,
     audioPath?: string | null,
+    lastImagePath?: string | null,
+    imageInputs?: { mode: GenSpaceMode; keyframes: KeyframeItem[] },
   ) => {
     const statusMsg = settings.model.startsWith('pro')
       ? 'Loading Pro model & generating...'
@@ -246,9 +260,12 @@ export function useGeneration(): UseGenerationReturn {
           cameraMotion: settings.cameraMotion,
           negativePrompt: (settings as { negativePrompt?: string }).negativePrompt ?? '',
           aspectRatio: settings.aspectRatio || '16:9',
-        }
-        if (imagePath) {
-          body.imagePath = imagePath
+          ...buildGenerateVideoImageInputs({
+            mode: imageInputs?.mode ?? 'video',
+            imagePath,
+            lastImagePath,
+            keyframes: imageInputs?.keyframes ?? [],
+          }),
         }
         if (audioPath) {
           body.audioPath = audioPath

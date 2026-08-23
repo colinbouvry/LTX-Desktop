@@ -25,6 +25,7 @@ from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from services.generation_interrupt import is_cancel_exception
 from services.interfaces import ZitAPIClient
+from server_utils.heartbeat import log_heartbeat
 from server_utils.media_validation import validate_image_file
 from services.services_utils import clamp_strength, compute_edit_dimensions, effective_edit_steps
 from state.app_settings import should_image_generate_with_fal_api
@@ -181,7 +182,8 @@ class ImageGenerationHandler(StateHandlerBase):
             )
             return result.images[0]
 
-        return self._run_local_batch(num_images, seed, "zit_edit", generate_one)
+        with log_heartbeat("zit edit"):
+            return self._run_local_batch(num_images, seed, "zit_edit", generate_one)
 
     def generate_image(
         self,
@@ -209,7 +211,8 @@ class ImageGenerationHandler(StateHandlerBase):
             )
             return result.images[0]
 
-        return self._run_local_batch(num_images, seed, "zit_image", generate_one)
+        with log_heartbeat(f"zit image {width}x{height}"):
+            return self._run_local_batch(num_images, seed, "zit_image", generate_one)
 
     def _run_local_batch(
         self,

@@ -3,6 +3,8 @@ import type { Asset, TimelineClip } from '../../types/project-model'
 import type { GenerationSettings } from '../../components/SettingsPanel'
 import type { GenerationError } from '../../lib/generation-errors'
 import type { VideoGenerationPipeline } from '../../lib/video-generation-model-specs'
+import type { GenSpaceMode } from '../../lib/genspace-multi-keyframe'
+import { fromPersistedKeyframes, type KeyframeItem } from '../../lib/multi-keyframe'
 import { addVisualAssetToProject } from '../../lib/asset-copy'
 import { ApiClient } from '../../lib/api-client'
 import { logger } from '../../lib/logger'
@@ -78,7 +80,14 @@ function resolveAssetPreviewPath(assets: Asset[], clips: TimelineClip[], asset: 
 export interface UseRegenerationParams {
   projectId: string
   // Generation hook values
-  regenGenerate: (prompt: string, imagePath: string | null, settings: GenerationSettings) => Promise<void>
+  regenGenerate: (
+    prompt: string,
+    imagePath: string | null,
+    settings: GenerationSettings,
+    audioPath?: string | null,
+    lastImagePath?: string | null,
+    imageInputs?: { mode: GenSpaceMode; keyframes: KeyframeItem[] },
+  ) => Promise<void>
   regenGenerateImage: (prompt: string, settings: GenerationSettings, editSource?: string | null) => Promise<void>
   regenVideoPath: string | null
   regenImagePath: string | null
@@ -243,7 +252,8 @@ export function useRegeneration(params: UseRegenerationParams) {
       return
     }
 
-    const imagePath = generationParams.mode === 'image-to-video' && generationParams.inputImageUrl
+    const imagePath = generationParams.inputImageUrl
+      && (generationParams.mode === 'image-to-video' || generationParams.mode === 'audio-to-video')
       ? generationParams.inputImageUrl
       : null
     const rawVideoSettings: GenerationSettings = {
@@ -259,7 +269,19 @@ export function useRegeneration(params: UseRegenerationParams) {
       // Local LoRA refs are filesystem paths the cloud API can't resolve.
       loras: !shouldVideoGenerateWithLtxApi ? generationParams.loras : undefined,
     }
-    void regenGenerate(generationParams.prompt, imagePath, rawVideoSettings)
+    void regenGenerate(
+      generationParams.prompt,
+      imagePath,
+      rawVideoSettings,
+      generationParams.mode === 'audio-to-video' ? generationParams.inputAudioUrl : undefined,
+      imagePath && generationParams.duration != null ? generationParams.inputLastImageUrl : undefined,
+      generationParams.mode === 'multi-keyframe'
+        ? {
+            mode: 'multi-keyframe',
+            keyframes: fromPersistedKeyframes(generationParams.keyframes ?? []),
+          }
+        : undefined,
+    )
   }, [
     isRegenerating,
     projectId,

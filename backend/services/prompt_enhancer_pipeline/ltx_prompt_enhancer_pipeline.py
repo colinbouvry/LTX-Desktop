@@ -31,6 +31,7 @@ import torch
 
 if TYPE_CHECKING:
     from ltx_core.text_encoders.gemma.encoders.base_encoder import LTXGemmaTextEncoder
+    from services.prompt_enhancement.i2v_frames import KeyframeStill
 
 
 def _generation_kwargs(text_encoder: "LTXGemmaTextEncoder") -> dict[str, Any]:
@@ -42,7 +43,7 @@ def _generation_kwargs(text_encoder: "LTXGemmaTextEncoder") -> dict[str, Any]:
 def _generate(
     text_encoder: "LTXGemmaTextEncoder",
     messages: list[dict[str, object]],
-    image: "torch.Tensor | None",
+    image: "torch.Tensor | list[torch.Tensor] | None",
     seed: int,
 ) -> str:
     # transformers' Gemma3Processor/Gemma3ForConditionalGeneration stubs don't type these
@@ -115,23 +116,47 @@ class LtxPromptEnhancerPipeline:
             ]
             return _generate(text_encoder, messages, image=None, seed=seed)
 
-    def enhance_i2v(self, prompt: str, image_path: str, system_prompt: str | None, seed: int) -> str:
+    def enhance_i2v(
+        self,
+        prompt: str,
+        image_path: str,
+        system_prompt: str | None,
+        seed: int,
+        last_image_path: str | None = None,
+        keyframes: list[KeyframeStill] | None = None,
+        duration: int | None = None,
+        fps: int | None = None,
+    ) -> str:
         from ltx_pipelines.utils.gpu_model import gpu_model
         from ltx_pipelines.utils.media_io import decode_image, resize_aspect_ratio_preserving
+        from services.prompt_enhancement import build_i2v_user_prompt_text, resolve_i2v_frames
 
-        image = decode_image(image_path=image_path)
-        image_tensor = resize_aspect_ratio_preserving(torch.tensor(image), 896).to(torch.uint8)
+        def _tensor(path: str) -> torch.Tensor:
+            image = decode_image(image_path=path)
+            return resize_aspect_ratio_preserving(torch.tensor(image), 896).to(torch.uint8)
+
+        frames = resolve_i2v_frames(image_path, last_image_path, keyframes, fps=fps)
+        user_text = build_i2v_user_prompt_text(
+            prompt,
+            has_last=last_image_path is not None and not keyframes,
+            keyframe_count=len(keyframes) if keyframes else 0,
+            duration=duration,
+            fps=fps,
+        )
+        user_content: list[dict[str, object]] = []
+        tensors: list[torch.Tensor] = []
+        for path, label in frames:
+            if label is not None:
+                user_content.append({"type": "text", "text": label})
+            user_content.append({"type": "image"})
+            tensors.append(_tensor(path))
+        user_content.append({"type": "text", "text": user_text})
 
         with gpu_model(self._build_text_encoder()) as text_encoder:
             resolved_system_prompt = system_prompt or _default_system_prompt(text_encoder, t2v=False)
             messages: list[dict[str, object]] = [
                 {"role": "system", "content": resolved_system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text", "text": f"User Raw Input Prompt: {prompt}."},
-                    ],
-                },
+                {"role": "user", "content": user_content},
             ]
-            return _generate(text_encoder, messages, image=image_tensor, seed=seed)
+            images: torch.Tensor | list[torch.Tensor] = tensors if len(tensors) > 1 else tensors[0]
+            return _generate(text_encoder, messages, image=images, seed=seed)

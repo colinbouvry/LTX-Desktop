@@ -313,9 +313,6 @@ export function LaunchGate({
         }
 
         await refreshModelRecommendations()
-
-        // TODO: Get actual available space
-        setAvailableSpace('1.8 TB')
       } catch (e) {
         logger.error(`Init error: ${e}`)
       }
@@ -325,6 +322,26 @@ export function LaunchGate({
       void fetchLicense()
     }
   }, [refreshModelRecommendations, showLicenseStep])
+
+  useEffect(() => {
+    if (!installPath) {
+      setAvailableSpace('...')
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const result = await window.electronAPI.getFreeDiskSpace({ path: installPath })
+        if (cancelled) return
+        setAvailableSpace(result.success ? formatBytes(result.bytes) : '—')
+      } catch {
+        if (!cancelled) setAvailableSpace('—')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [installPath])
 
   // Cycle install messages
   useEffect(() => {

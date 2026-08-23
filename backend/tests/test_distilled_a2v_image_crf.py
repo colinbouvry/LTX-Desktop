@@ -44,3 +44,27 @@ def test_resolve_image_conditionings_builds_inputs_and_calls_resolve_crf() -> No
         ("start.png", 0, 0.8, _CHECKPOINT_CRF),
         ("end.png", 24, 1.0, _CHECKPOINT_CRF),
     ]
+
+
+def test_encode_stage_image_conditionings_uses_combined_not_replacing_latent(monkeypatch) -> None:
+    """Last-frame A2V crashed: replacing_latent treats pixel frame_idx as a latent index."""
+    from services.a2v_pipeline.distilled_a2v_pipeline import encode_stage_image_conditionings
+
+    monkeypatch.setattr(
+        "ltx_pipelines.utils.helpers.combined_image_conditionings",
+        lambda **kwargs: "combined",
+    )
+    monkeypatch.setattr(
+        "ltx_pipelines.utils.helpers.image_conditionings_by_replacing_latent",
+        lambda **kwargs: "replacing",
+    )
+
+    result = encode_stage_image_conditionings(
+        [],
+        height=352,
+        width=640,
+        video_encoder=object(),
+        dtype=object(),
+        device=object(),
+    )
+    assert result == "combined"

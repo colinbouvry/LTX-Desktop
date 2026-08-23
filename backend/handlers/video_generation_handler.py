@@ -53,6 +53,7 @@ from server_utils.media_validation import (
 from services.generation_interrupt import GenerationCancelledError, is_cancel_exception
 from services.interfaces import LTXAPIClient
 from services.ltx_api_client.ltx_api_client import LTXAPIClientError
+from services.prompt_enhancement.i2v_frames import KeyframeStill
 from state.app_state_types import AppState
 from state.app_settings import should_video_generate_with_ltx_api
 
@@ -102,7 +103,14 @@ class VideoGenerationHandler(StateHandlerBase):
         self._ltx_api_client = ltx_api_client
 
     def _resolve_prompt_enhancement(
-        self, prompt: str, *, image_path: str | None
+        self,
+        prompt: str,
+        *,
+        image_path: str | None,
+        last_image_path: str | None = None,
+        keyframes: list[KeyframeStill] | None = None,
+        duration: int | None = None,
+        fps: int | None = None,
     ) -> tuple[str, bool]:
         """Apply the enhancer setting, returning ``(prompt, enhance_via_api)``.
 
@@ -118,14 +126,21 @@ class VideoGenerationHandler(StateHandlerBase):
         """
         settings = self.state.app_settings
         enabled = (
-            settings.prompt_enhancer_enabled_i2v if image_path is not None
+            settings.prompt_enhancer_enabled_i2v if image_path is not None or keyframes
             else settings.prompt_enhancer_enabled_t2v
         )
         if not enabled:
             return prompt, False
         if not self._text.should_use_local_encoding():
             return prompt, True
-        return self._prompt_enhancement.enhance_for_generation(prompt, image_path=image_path), False
+        return self._prompt_enhancement.enhance_for_generation(
+            prompt,
+            image_path=image_path,
+            last_image_path=last_image_path,
+            keyframes=keyframes,
+            duration=duration,
+            fps=fps,
+        ), False
 
     def _active_ltx_model_id(self) -> LTXLocalModelId | None:
         return resolve_active_ltx_model_id(
@@ -216,10 +231,38 @@ class VideoGenerationHandler(StateHandlerBase):
                 num_frames = self._compute_num_frames(duration, fps)
 
             image = None
+            last_image = None
+            keyframe_images: list[tuple[Image.Image, int, float]] | None = None
             image_path = normalize_optional_path(req.imagePath)
-            if image_path:
-                image = self._prepare_image(image_path, width, height)
-                logger.info("Image: %s -> %sx%s", image_path, width, height)
+            last_image_path = normalize_optional_path(req.lastImagePath)
+            if req.keyframes:
+                keyframe_images = [
+                    (self._prepare_image(keyframe.imagePath, width, height), keyframe.frameIndex, keyframe.strength)
+                    for keyframe in req.keyframes
+                ]
+                logger.info("Keyframes: %s", [(keyframe.imagePath, keyframe.frameIndex) for keyframe in req.keyframes])
+                opening = min(req.keyframes, key=lambda keyframe: keyframe.frameIndex)
+                image_path = normalize_optional_path(opening.imagePath)
+                last_image_path = None
+                enhance_keyframes = sorted(
+                    (
+                        (
+                            normalize_optional_path(keyframe.imagePath) or keyframe.imagePath,
+                            keyframe.frameIndex,
+                            keyframe.strength,
+                        )
+                        for keyframe in req.keyframes
+                    ),
+                    key=lambda item: item[1],
+                )
+            else:
+                enhance_keyframes = None
+                if image_path:
+                    image = self._prepare_image(image_path, width, height)
+                    logger.info("Image: %s -> %sx%s", image_path, width, height)
+                if last_image_path:
+                    last_image = self._prepare_image(last_image_path, width, height)
+                    logger.info("Last image: %s -> %sx%s", last_image_path, width, height)
 
             generation_id = self._make_generation_id()
             seed = req.seed if req.seed is not None else self._resolve_seed()
@@ -229,7 +272,12 @@ class VideoGenerationHandler(StateHandlerBase):
             # enhancement needs the VRAM a resident pipeline holds, and evicting a pipeline is
             # refused once a generation is running.
             prompt, enhance_via_api = self._resolve_prompt_enhancement(
-                req.prompt, image_path=image_path
+                req.prompt,
+                image_path=image_path,
+                last_image_path=last_image_path,
+                keyframes=enhance_keyframes,
+                duration=req.duration,
+                fps=req.fps,
             )
 
             try:
@@ -241,6 +289,8 @@ class VideoGenerationHandler(StateHandlerBase):
                     prompt=prompt,
                     enhance_via_api=enhance_via_api,
                     image=image,
+                    last_image=last_image,
+                    keyframe_images=keyframe_images,
                     height=height,
                     width=width,
                     num_frames=num_frames,
@@ -294,9 +344,11 @@ class VideoGenerationHandler(StateHandlerBase):
         camera_motion: VideoCameraMotion,
         negative_prompt: str,
         loras: list[tuple[str, float]] | None = None,
+        last_image: Image.Image | None = None,
+        keyframe_images: list[tuple[Image.Image, int, float]] | None = None,
     ) -> str:
         t_total_start = time.perf_counter()
-        gen_mode = "i2v" if image is not None else "t2v"
+        gen_mode = "keyframes" if keyframe_images else "i2v" if image is not None else "t2v"
         frames_log = (
             f"auto {num_frames.min_seconds:g}-{num_frames.max_seconds:g}s"
             if isinstance(num_frames, AutoDurationSpec)
@@ -308,12 +360,12 @@ class VideoGenerationHandler(StateHandlerBase):
 
         total_steps = 8
 
-        images: list[ImageConditioningInput] = []
-        temp_image_path: str | None = None
-        if image is not None:
-            temp_image_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
-            image.save(temp_image_path)
-            images = [ImageConditioningInput(path=temp_image_path, frame_idx=0, strength=1.0)]
+        if keyframe_images:
+            images, temp_image_paths = self._keyframe_conditionings(keyframe_images)
+        else:
+            images, temp_image_paths = self._image_conditionings(
+                first=image, last=last_image, num_frames=num_frames
+            )
 
         output_path = self._make_output_path()
 
@@ -375,8 +427,7 @@ class VideoGenerationHandler(StateHandlerBase):
             return str(output_path)
         finally:
             self._text.clear_api_embeddings()
-            if temp_image_path and os.path.exists(temp_image_path):
-                os.unlink(temp_image_path)
+            self._unlink_temp_paths(temp_image_paths)
 
     def _generate_a2v(
         self, req: GenerateVideoRequest, duration: int, fps: int, *, audio_path: str
@@ -400,29 +451,32 @@ class VideoGenerationHandler(StateHandlerBase):
         num_frames = self._compute_num_frames(duration, fps)
 
         image = None
-        temp_image_path: str | None = None
         image_path = normalize_optional_path(req.imagePath)
         if image_path:
             image = self._prepare_image(image_path, width, height)
+
+        last_image = None
+        last_image_path = normalize_optional_path(req.lastImagePath)
+        if last_image_path:
+            last_image = self._prepare_image(last_image_path, width, height)
 
         seed = req.seed if req.seed is not None else self._resolve_seed()
         loras = self._resolve_loras(req.loras)
 
         generation_id = self._make_generation_id()
+        temp_image_paths: list[str] = []
 
         try:
             neg = req.negativePrompt if req.negativePrompt else self.config.default_negative_prompt
 
-            images: list[ImageConditioningInput] = []
-            if image is not None:
-                temp_image_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
-                image.save(temp_image_path)
-                images = [ImageConditioningInput(path=temp_image_path, frame_idx=0, strength=1.0)]
+            images, temp_image_paths = self._image_conditionings(
+                first=image, last=last_image, num_frames=num_frames
+            )
 
             # Same ordering rule as the fast path: enhance before the pipeline takes the GPU
             # (and so before start_generation, which requires a pipeline to already be loaded).
             a2v_base_prompt, a2v_enhance = self._resolve_prompt_enhancement(
-                req.prompt, image_path=image_path
+                req.prompt, image_path=image_path, last_image_path=last_image_path
             )
             enhanced_prompt = a2v_base_prompt + self.config.camera_motion_prompts.get(req.cameraMotion, "")
 
@@ -478,8 +532,59 @@ class VideoGenerationHandler(StateHandlerBase):
             raise HTTPError(500, str(e)) from e
         finally:
             self._text.clear_api_embeddings()
-            if temp_image_path and os.path.exists(temp_image_path):
-                os.unlink(temp_image_path)
+            self._unlink_temp_paths(temp_image_paths)
+
+    def _image_conditionings(
+        self,
+        *,
+        first: Image.Image | None,
+        last: Image.Image | None,
+        num_frames: int | AutoDurationSpec,
+    ) -> tuple[list[ImageConditioningInput], list[str]]:
+        temp_paths: list[str] = []
+        images: list[ImageConditioningInput] = []
+        if first is not None:
+            path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+            first.save(path)
+            temp_paths.append(path)
+            images.append(ImageConditioningInput(path=path, frame_idx=0, strength=1.0))
+        if last is not None:
+            if first is None:
+                raise HTTPError(
+                    422,
+                    "Last frame requires a first-frame image",
+                    code="INVALID_VIDEO_GENERATION_SPEC",
+                )
+            if not isinstance(num_frames, int):
+                raise HTTPError(
+                    422,
+                    "Last frame cannot be combined with automatic duration",
+                    code="INVALID_VIDEO_GENERATION_SPEC",
+                )
+            path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+            last.save(path)
+            temp_paths.append(path)
+            images.append(ImageConditioningInput(path=path, frame_idx=num_frames - 1, strength=1.0))
+        return images, temp_paths
+
+    def _keyframe_conditionings(
+        self,
+        frames: list[tuple[Image.Image, int, float]],
+    ) -> tuple[list[ImageConditioningInput], list[str]]:
+        temp_paths: list[str] = []
+        images: list[ImageConditioningInput] = []
+        for image, frame_idx, strength in frames:
+            path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+            image.save(path)
+            temp_paths.append(path)
+            images.append(ImageConditioningInput(path=path, frame_idx=frame_idx, strength=strength))
+        return images, temp_paths
+
+    @staticmethod
+    def _unlink_temp_paths(paths: list[str]) -> None:
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
     def _prepare_image(self, image_path: str, width: int, height: int) -> Image.Image:
         validated_path = validate_image_file(image_path)
@@ -521,6 +626,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
             audio_path = normalize_optional_path(req.audioPath)
             image_path = normalize_optional_path(req.imagePath)
+            last_image_path = normalize_optional_path(req.lastImagePath)
             has_input_audio = bool(audio_path)
             has_input_image = bool(image_path)
 
@@ -564,11 +670,18 @@ class VideoGenerationHandler(StateHandlerBase):
                         file_path=str(validated_audio_path),
                     )
                     image_uri: str | None = None
+                    last_frame_uri: str | None = None
                     if validated_image_path is not None:
                         self._generation.update_progress("uploading_image", 35, None, None)
                         image_uri = self._ltx_api_client.upload_file(
                             api_key=api_key,
                             file_path=str(validated_image_path),
+                        )
+                    if last_image_path is not None:
+                        self._generation.update_progress("uploading_image", 45, None, None)
+                        last_frame_uri = self._ltx_api_client.upload_file(
+                            api_key=api_key,
+                            file_path=str(validate_image_file(last_image_path)),
                         )
                     self._generation.update_progress("inference", 55, None, None)
                     video_bytes = self._ltx_api_client.generate_audio_to_video(
@@ -576,6 +689,7 @@ class VideoGenerationHandler(StateHandlerBase):
                         prompt=prompt,
                         audio_uri=audio_uri,
                         image_uri=image_uri,
+                        last_frame_uri=last_frame_uri,
                         model=api_model_id,
                         resolution=api_resolution,
                     )
@@ -592,11 +706,19 @@ class VideoGenerationHandler(StateHandlerBase):
                         api_key=api_key,
                         file_path=str(validated_image_path),
                     )
+                    last_frame_uri: str | None = None
+                    if last_image_path is not None:
+                        self._generation.update_progress("uploading_image", 35, None, None)
+                        last_frame_uri = self._ltx_api_client.upload_file(
+                            api_key=api_key,
+                            file_path=str(validate_image_file(last_image_path)),
+                        )
                     self._generation.update_progress("inference", 55, None, None)
                     video_bytes = self._ltx_api_client.generate_image_to_video(
                         api_key=api_key,
                         prompt=prompt,
                         image_uri=image_uri,
+                        last_frame_uri=last_frame_uri,
                         model=api_model_id,
                         resolution=api_resolution,
                         duration=None if duration is None else float(duration),

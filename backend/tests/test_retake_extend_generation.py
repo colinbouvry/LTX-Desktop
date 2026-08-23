@@ -1,8 +1,7 @@
-"""Local Retake/Extend routing for LTX 2.3 and 2.5.
+"""Local Retake/Extend routing for LTX 2.3 (and rejection on 2.5).
 
-The fake pipeline never runs GPU code. These tests pin that each model id
-loads the matching checkpoint/VAE paths and that a model switch rebuilds
-the cached Retake pipeline.
+The fake pipeline never runs GPU code. These tests pin that 2.3 loads the
+matching checkpoint/VAE paths, and that local 2.5 rejects Retake/Extend.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from runtime_config.ltx_runtime_paths import resolve_ltx_runtime_paths
 from runtime_config.model_download_specs import get_existing_cp_path, get_ltx_model_spec
 from state.app_settings import resolved_use_conv_vae
 from state.app_state_types import GpuSlot, RetakePipelineState
+from tests.http_error_assertions import assert_http_error
 
 _LOCAL_2_3: LTXLocalModelId = "ltx-2.3-22b-distilled"
 _LOCAL_2_5: LTXLocalModelId = "ltx-2.5-22b-distilled"
@@ -76,11 +76,10 @@ def _assert_retake_pipeline_model(test_state, model_id: LTXLocalModelId) -> None
     assert slot.active_pipeline.ltx_model_id == model_id
 
 
-@pytest.mark.parametrize("model_id", [_LOCAL_2_3, _LOCAL_2_5])
 def test_local_retake_routes_to_model_paths(
-    client, test_state, create_fake_model_files, fake_services, model_id: LTXLocalModelId
+    client, test_state, create_fake_model_files, fake_services
 ) -> None:
-    _install_local(test_state, create_fake_model_files, model_id)
+    _install_local(test_state, create_fake_model_files, _LOCAL_2_3)
     video_path = _make_valid_video(test_state)
 
     r = client.post(
@@ -91,16 +90,15 @@ def test_local_retake_routes_to_model_paths(
     data = r.json()
     assert data["status"] == "complete"
     assert data["video_path"]
-    _assert_create_paths(fake_services, test_state, model_id)
-    _assert_retake_pipeline_model(test_state, model_id)
+    _assert_create_paths(fake_services, test_state, _LOCAL_2_3)
+    _assert_retake_pipeline_model(test_state, _LOCAL_2_3)
 
 
-@pytest.mark.parametrize("model_id", [_LOCAL_2_3, _LOCAL_2_5])
 @pytest.mark.parametrize("mode", ["start", "end"])
 def test_local_extend_routes_to_model_paths(
-    client, test_state, create_fake_model_files, fake_services, model_id: LTXLocalModelId, mode: str
+    client, test_state, create_fake_model_files, fake_services, mode: str
 ) -> None:
-    _install_local(test_state, create_fake_model_files, model_id)
+    _install_local(test_state, create_fake_model_files, _LOCAL_2_3)
     video_path = _make_valid_video(test_state, frames=9)
 
     r = client.post(
@@ -111,12 +109,49 @@ def test_local_extend_routes_to_model_paths(
     data = r.json()
     assert data["status"] == "complete"
     assert data["video_path"]
-    _assert_create_paths(fake_services, test_state, model_id)
-    _assert_retake_pipeline_model(test_state, model_id)
+    _assert_create_paths(fake_services, test_state, _LOCAL_2_3)
+    _assert_retake_pipeline_model(test_state, _LOCAL_2_3)
     assert fake_services.retake_pipeline.extend_calls[-1]["mode"] == mode
 
 
-def test_retake_pipeline_rebuilds_when_switching_2_3_to_2_5(
+def test_local_retake_rejected_on_2_5(client, test_state, create_fake_model_files, fake_services) -> None:
+    _install_local(test_state, create_fake_model_files, _LOCAL_2_5)
+    video_path = _make_valid_video(test_state)
+
+    r = client.post(
+        "/api/retake",
+        json={"video_path": video_path, "start_time": 1.0, "duration": 3.0, "prompt": "make it dramatic"},
+    )
+    assert_http_error(
+        r,
+        status_code=409,
+        code="UNSUPPORTED_RETAKE",
+        message="Retake is not supported for the active LTX model.",
+    )
+    assert fake_services.retake_pipeline.create_calls == []
+
+
+@pytest.mark.parametrize("mode", ["start", "end"])
+def test_local_extend_rejected_on_2_5(
+    client, test_state, create_fake_model_files, fake_services, mode: str
+) -> None:
+    _install_local(test_state, create_fake_model_files, _LOCAL_2_5)
+    video_path = _make_valid_video(test_state, frames=9)
+
+    r = client.post(
+        "/api/extend",
+        json={"video_path": video_path, "duration": 4.0, "prompt": "continue the motion", "mode": mode},
+    )
+    assert_http_error(
+        r,
+        status_code=409,
+        code="UNSUPPORTED_EXTEND",
+        message="Extend is not supported for the active LTX model.",
+    )
+    assert fake_services.retake_pipeline.create_calls == []
+
+
+def test_retake_on_2_5_does_not_rebuild_pipeline_after_2_3(
     client, test_state, create_fake_model_files, fake_services
 ) -> None:
     create_fake_model_files(model_id=_LOCAL_2_3)
@@ -134,11 +169,10 @@ def test_retake_pipeline_rebuilds_when_switching_2_3_to_2_5(
 
     test_state.state.app_settings.active_ltx_model_id = _LOCAL_2_5
     second = client.post("/api/retake", json=payload)
-    assert second.status_code == 200
-    _assert_create_paths(fake_services, test_state, _LOCAL_2_5)
-    _assert_retake_pipeline_model(test_state, _LOCAL_2_5)
-    assert len(fake_services.retake_pipeline.create_calls) == 2
-    assert (
-        fake_services.retake_pipeline.create_calls[0]["checkpoint_path"]
-        != fake_services.retake_pipeline.create_calls[1]["checkpoint_path"]
+    assert_http_error(
+        second,
+        status_code=409,
+        code="UNSUPPORTED_RETAKE",
+        message="Retake is not supported for the active LTX model.",
     )
+    assert len(fake_services.retake_pipeline.create_calls) == 1

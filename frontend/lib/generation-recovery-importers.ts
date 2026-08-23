@@ -2,6 +2,7 @@ import { addVisualAssetToProject } from './asset-copy'
 import { toModelsDirRelativeRef } from './lora-library'
 import { logger } from './logger'
 import type { RecoveryGenType, RecoveryImporter } from './generation-recovery'
+import { videoGenerationModeFromInputs } from './multi-keyframe'
 
 // Mirrors GenSpace's own live-generation completion effect (see the `videoPath` effect in
 // GenSpace.tsx) but operates on the recovery marker's captured context instead of live component
@@ -17,9 +18,11 @@ const importVideo: RecoveryImporter = async (ctx, result, { addAsset, modelsDir 
   if (!copied) throw new Error('Could not persist generated video to project storage')
 
   const s = ctx.settings
-  const genMode = ctx.inputAudioUrl
-    ? 'audio-to-video'
-    : ctx.inputImageUrl ? 'image-to-video' : 'text-to-video'
+  const genMode = videoGenerationModeFromInputs({
+    keyframes: ctx.keyframes,
+    audioUrl: ctx.inputAudioUrl,
+    imageUrl: ctx.inputImageUrl,
+  })
 
   addAsset(ctx.projectId, {
     type: 'video',
@@ -44,7 +47,9 @@ const importVideo: RecoveryImporter = async (ctx, result, { addAsset, modelsDir 
       imageAspectRatio: s?.aspectRatio,
       imageSteps: 4,
       inputImageUrl: ctx.inputImageUrl,
+      inputLastImageUrl: ctx.inputLastImageUrl,
       inputAudioUrl: ctx.inputAudioUrl,
+      keyframes: ctx.keyframes && ctx.keyframes.length > 0 ? ctx.keyframes : undefined,
       loras: s?.loras && s.loras.length > 0
         ? s.loras.map(l => ({ ref: toModelsDirRelativeRef(l.ref, modelsDir), name: l.name, scale: l.scale }))
         : undefined,

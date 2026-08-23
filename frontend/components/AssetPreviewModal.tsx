@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronLeft, ChevronRight, Copy, X } from 'lucide-react'
 import type { Asset } from '../types/project-model'
 import { pathToFileUrl } from '../lib/file-url'
 import { formatPipelineDisplayName } from '../lib/video-generation-model-specs'
+
+const mediaClassName =
+  'mx-auto max-h-[calc(100dvh-18vh-7rem)] max-w-full rounded-xl object-contain'
 
 // Duration can be a raw float (e.g. extend output: 12.041667s). Show a clean value:
 // integers as-is, otherwise at most 2 decimals with trailing zeros trimmed.
@@ -71,9 +75,9 @@ export function AssetPreviewModal({
     formatDurationLabel(asset),
   ].filter(Boolean)
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90"
       onClick={onClose}
     >
       <button
@@ -100,8 +104,11 @@ export function AssetPreviewModal({
         <ChevronRight className="h-6 w-6" />
       </button>
 
-      <div className="relative max-w-5xl w-full max-h-full px-20 py-8" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
+      <div
+        className="relative flex max-h-full w-full max-w-5xl flex-col px-20 py-6"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="mb-3 flex shrink-0 items-center justify-between">
           <span className="text-sm text-zinc-500 font-medium">
             {index + 1} / {total}
           </span>
@@ -119,19 +126,19 @@ export function AssetPreviewModal({
             src={pathToFileUrl(asset.path)}
             controls
             autoPlay
-            className="w-full rounded-xl object-contain max-h-[75vh]"
+            className={mediaClassName}
           />
         ) : (
           <img
             key={asset.id}
             src={pathToFileUrl(asset.path)}
             alt=""
-            className="w-full rounded-xl object-contain max-h-[75vh]"
+            className={mediaClassName}
           />
         )}
-        <div className="mt-4 text-center">
-          <div className="inline-flex items-start gap-2 max-w-full">
-            <p className="text-zinc-300 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-left">{asset.prompt}</p>
+        <div className="mt-3 shrink-0 text-center">
+          <div className="inline-flex max-w-full items-start gap-2">
+            <p className="max-h-[18vh] overflow-y-auto whitespace-pre-wrap break-words text-left text-zinc-300">{asset.prompt}</p>
             {asset.prompt && (
               <button
                 onClick={() => {
@@ -147,12 +154,13 @@ export function AssetPreviewModal({
             )}
           </div>
           {metaParts.length > 0 && (
-            <p className="text-zinc-500 text-sm mt-1">
+            <p className="mt-1 text-sm text-zinc-500">
               {metaParts.join(' • ')}
             </p>
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

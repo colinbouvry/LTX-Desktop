@@ -11,9 +11,9 @@ from urllib.parse import urlencode
 from _routes._errors import HTTPError
 from api_types import GeminiModelOptionPayload
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from services.interfaces import HTTPClient, HttpTransportError, JSONValue
+from services.interfaces import HTTPClient, HttpResponseLike, HttpTransportError, JSONValue
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _MODELS_PREFIX = "models/"
 _GEMINI_LIST_PAGE_SIZE = 1000
@@ -386,6 +386,29 @@ def apply_gemini_thinking_config(
     return config
 
 
+def _is_invalid_api_key_error(response: HttpResponseLike) -> bool:
+    """True for Gemini 400s with error.status INVALID_ARGUMENT and details.reason API_KEY_INVALID."""
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    error = cast(dict[str, object], body).get("error")
+    if not isinstance(error, dict):
+        return False
+    error_fields = cast(dict[str, object], error)
+    if error_fields.get("status") != "INVALID_ARGUMENT":
+        return False
+    details = error_fields.get("details")
+    if not isinstance(details, list):
+        return False
+    for item in cast(list[object], details):
+        if isinstance(item, dict) and cast(dict[str, object], item).get("reason") == "API_KEY_INVALID":
+            return True
+    return False
+
+
 def call_gemini_generate_content(
     http: HTTPClient,
     *,
@@ -414,6 +437,12 @@ def call_gemini_generate_content(
         raise HTTPError(504, "Gemini API request timed out") from exc
 
     if response.status_code != 200:
+        if _is_invalid_api_key_error(response):
+            raise HTTPError(
+                response.status_code,
+                "Gemini rejected the configured API key",
+                code="GEMINI_INVALID_API_KEY",
+            )
         raise HTTPError(response.status_code, f"Gemini API error: {response.text}")
 
     text = extract_gemini_text(response.json()).strip()

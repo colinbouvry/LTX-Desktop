@@ -20,6 +20,10 @@ dependencies = [
     "psutil>=5.9.0",
     "pydantic>=2.7.0",
     # LTX-2 inference dependencies (v1.2.0 is the 2.5-capable release).
+    # LLM: changing ltx-core / ltx-pipelines version or git tag requires re-checking
+    # every monkey-patch in backend/services/patches/ (imported from ltx2_server.py).
+    # Those rebind private upstream symbols; drop a patch only if upstream now includes
+    # the fix (see each module's "Remove once ..." docstring) and its tests still pass.
     "ltx-core==1.2.0",
     "ltx-pipelines==1.2.0",
     "diffusers>=0.39.0",
@@ -76,6 +80,7 @@ natten = { url = "https://storage.googleapis.com/ltx-desktop-artifacts/wheels/na
 # Official LTX-2 v1.2.0 packages (not on PyPI). Same git+subdirectory pattern as
 # 2.3; the tag is the 2.5-capable release. We do not take ltx-core's own
 # tool.uv.sources (cu132) — this app's pytorch-cu128 pin above owns torch.
+# LLM: bumping this tag/version → re-verify backend/services/patches/ (see ltx2_server.py).
 ltx-core = { git = "https://github.com/Lightricks/LTX-2.git", subdirectory = "packages/ltx-core", tag = "v1.2.0" }
 ltx-pipelines = { git = "https://github.com/Lightricks/LTX-2.git", subdirectory = "packages/ltx-pipelines", tag = "v1.2.0" }
 
