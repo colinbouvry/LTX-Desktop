@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React from 'react'
+import { createPortal } from 'react-dom'
+import { useFixedMenu } from '../hooks/use-fixed-menu'
 import { Tooltip } from './ui/tooltip'
 
 // Generic settings dropdown used across the prompt bar's control rows.
+// The menu is portaled to document.body so overflow-hidden ancestors
+// (react-resizable-panels) cannot clip it.
 export function SettingsDropdown({
   trigger,
   options,
@@ -24,20 +28,7 @@ export function SettingsDropdown({
   // Prompt-bar menus open upward; gallery toolbar menus open downward.
   placement?: 'above' | 'below'
 }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isOpen])
+  const { isOpen, setIsOpen, triggerRef, menuRef, style } = useFixedMenu(placement)
 
   const triggerButton = (
     <button
@@ -49,13 +40,15 @@ export function SettingsDropdown({
   )
 
   return (
-    <div ref={dropdownRef} className="relative">
+    <div ref={triggerRef} className="relative">
       {tooltip && !isOpen ? <Tooltip content={tooltip}>{triggerButton}</Tooltip> : triggerButton}
 
-      {isOpen && (
-        <div className={`absolute left-0 bg-zinc-800 border border-zinc-700 rounded-md p-2 min-w-[160px] shadow-xl z-[9999] ${
-          placement === 'below' ? 'top-full mt-2' : 'bottom-full mb-2'
-        }`}>
+      {isOpen && createPortal(
+        <div
+          ref={menuRef}
+          style={style}
+          className="fixed w-max bg-zinc-800 border border-zinc-700 rounded-md p-2 min-w-[160px] shadow-xl"
+        >
           <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">{title}</div>
           {/* Cap height + scroll so a long option list (e.g. many catalog / custom IC-LoRAs)
               doesn't clip off-screen — matches the LoRA picker's max-h-80. */}
@@ -92,7 +85,8 @@ export function SettingsDropdown({
               </div>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

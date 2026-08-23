@@ -17,7 +17,7 @@ import { LaunchGate } from './components/FirstRunSetup'
 import { LtxUpgradePrompt } from './components/LtxUpgradePrompt'
 import { dismissUpgrade, isUpgradeDismissed } from './lib/upgrade-prompt-dismissals'
 import { PythonSetup } from './components/PythonSetup'
-import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
+import { SettingsModal, type SettingsInitialReason, type SettingsTabId } from './components/SettingsModal'
 import { LogViewer } from './components/LogViewer'
 import { ApiGatewayModal, type ApiGatewaySection } from './components/ApiGatewayModal'
 import { Button } from './components/ui/button'
@@ -42,6 +42,7 @@ function AppContent() {
   const [setupState, setSetupState] = useState<SetupState>('loading')
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabId | undefined>(undefined)
+  const [settingsInitialReason, setSettingsInitialReason] = useState<SettingsInitialReason | undefined>(undefined)
   const { update, isGenerationActive, isModalOpen, openModal, closeModal, checkForUpdates } = useAppUpdateModal()
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false)
   const [isFinalizingFirstRun, setIsFinalizingFirstRun] = useState(false)
@@ -71,6 +72,7 @@ function AppContent() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if (detail?.tab) setSettingsInitialTab(detail.tab)
+      setSettingsInitialReason(detail?.reason === 'geminiKeyRequired' ? 'geminiKeyRequired' : undefined)
       setIsSettingsOpen(true)
     }
     window.addEventListener('open-settings', handler)
@@ -557,8 +559,10 @@ function AppContent() {
         onClose={() => {
           setIsSettingsOpen(false)
           setSettingsInitialTab(undefined)
+          setSettingsInitialReason(undefined)
         }}
         initialTab={settingsInitialTab}
+        initialReason={settingsInitialReason}
         update={update}
         onOpenUpdate={openModal}
         onCheckForUpdates={checkForUpdates}

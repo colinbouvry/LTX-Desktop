@@ -5,17 +5,24 @@ from __future__ import annotations
 import logging
 import uuid
 
+from services.gemini_text_client import DEFAULT_GEMINI_MODEL
 from services.interfaces import HttpTransportError
 from services.ltx_api_client.ltx_api_client import LTXAPIClientError, LTXRetakeResult
 from tests.http_error_assertions import assert_http_error
 from tests.fakes import FakeResponse
 
 _LOCAL_2_3 = "ltx-2.3-22b-distilled-1.1"
+_LOCAL_2_5 = "ltx-2.5-22b-distilled"
 
 
 def _install_local_2_3(test_state, create_fake_model_files, **kwargs) -> None:
     create_fake_model_files(model_id=_LOCAL_2_3, **kwargs)
     test_state.state.app_settings.active_ltx_model_id = _LOCAL_2_3
+
+
+def _install_local_2_5(test_state, create_fake_model_files, **kwargs) -> None:
+    create_fake_model_files(model_id=_LOCAL_2_5, **kwargs)
+    test_state.state.app_settings.active_ltx_model_id = _LOCAL_2_5
 
 
 def _gemini_ok(text: str = "Enhanced prompt text") -> FakeResponse:
@@ -46,7 +53,7 @@ class TestSuggestGapPrompt:
         data = r.json()
         assert data["status"] == "success"
         assert data["suggested_prompt"] == "A smooth transition scene"
-        assert "models/gemini-2.5-flash-lite:generateContent" in test_state.http.calls[-1].url
+        assert f"models/{DEFAULT_GEMINI_MODEL}:generateContent" in test_state.http.calls[-1].url
 
     def test_uses_configured_gemini_model(self, client, test_state, caplog):
         test_state.state.app_settings.gemini_api_key = "key"
@@ -78,9 +85,9 @@ class TestSuggestGapPrompt:
             json={"beforePrompt": "sunset on a beach", "afterPrompt": "sunrise over mountains", "gapDuration": 3},
         )
         assert r.status_code == 200
-        assert "models/gemini-2.5-flash-lite:generateContent" in test_state.http.calls[-1].url
+        assert f"models/{DEFAULT_GEMINI_MODEL}:generateContent" in test_state.http.calls[-1].url
         assert test_state.http.calls[-1].json_payload["generationConfig"]["thinkingConfig"] == {
-            "thinkingBudget": 0
+            "thinkingLevel": "LOW"
         }
 
     def test_happy_path_with_frames(self, client, test_state, make_test_image, tmp_path):
@@ -331,15 +338,19 @@ class TestRetake:
         assert data["status"] == "complete"
         assert data["video_path"]
 
-    def test_local_retake_happy_path_on_2_5(self, client, test_state, create_fake_model_files):
-        create_fake_model_files(include_zit=False)
+    def test_local_retake_rejected_on_2_5(self, client, test_state, create_fake_model_files):
+        _install_local_2_5(test_state, create_fake_model_files, include_zit=False)
         test_state.state.app_settings.use_local_text_encoder = True
         test_state.config.local_generations_mode = "full_models_loading"
 
         video_path = self._make_valid_video(test_state)
         r = client.post("/api/retake", json=self._base_payload(video_path))
-        assert r.status_code == 200
-        assert r.json()["status"] == "complete"
+        assert_http_error(
+            r,
+            status_code=409,
+            code="UNSUPPORTED_RETAKE",
+            message="Retake is not supported for the active LTX model.",
+        )
 
     def test_local_retake_mode_mapping(self, client, test_state, create_fake_model_files, fake_services):
         _install_local_2_3(test_state, create_fake_model_files, include_zit=False)
@@ -577,15 +588,19 @@ class TestExtend:
         assert data["status"] == "complete"
         assert data["video_path"]
 
-    def test_local_extend_happy_path_on_2_5(self, client, test_state, create_fake_model_files):
-        create_fake_model_files(include_zit=False)
+    def test_local_extend_rejected_on_2_5(self, client, test_state, create_fake_model_files):
+        _install_local_2_5(test_state, create_fake_model_files, include_zit=False)
         test_state.state.app_settings.use_local_text_encoder = True
         test_state.config.local_generations_mode = "full_models_loading"
 
         video_path = self._make_valid_video(test_state)
         r = client.post("/api/extend", json=self._base_payload(video_path))
-        assert r.status_code == 200
-        assert r.json()["status"] == "complete"
+        assert_http_error(
+            r,
+            status_code=409,
+            code="UNSUPPORTED_EXTEND",
+            message="Extend is not supported for the active LTX model.",
+        )
 
     def test_local_extend_snaps_frames_and_forwards_mode(self, client, test_state, create_fake_model_files, fake_services):
         _install_local_2_3(test_state, create_fake_model_files, include_zit=False)

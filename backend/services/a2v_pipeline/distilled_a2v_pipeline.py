@@ -36,6 +36,36 @@ def resolve_image_conditionings(
     return image_conditioner.resolve_crf(ltx_images)
 
 
+def encode_stage_image_conditionings(
+    images: list[LtxImageInput],
+    *,
+    height: int,
+    width: int,
+    video_encoder: Any,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> list[Any]:
+    """Pixel-index image conds for distilled A2V stages.
+
+    Same helper as DistilledPipeline and a2vid_two_stage: frame 0 replaces latent 0;
+    later frames are keyframes at that pixel index.
+
+    Do not use image_conditionings_by_replacing_latent — it treats frame_idx as a
+    latent index. Last pixel frame (num_frames-1, e.g. 240 at 10s/24fps) is past the
+    VAE-compressed sequence (~31 latents) and apply_to empty-slices.
+    """
+    from ltx_pipelines.utils.helpers import combined_image_conditionings
+
+    return combined_image_conditionings(
+        images=images,
+        height=height,
+        width=width,
+        video_encoder=video_encoder,
+        dtype=dtype,
+        device=device,
+    )
+
+
 class DistilledA2VPipeline:
     """Two-stage distilled audio-to-video pipeline.
 
@@ -114,10 +144,7 @@ class DistilledA2VPipeline:
         from ltx_core.types import Audio, AudioLatentShape
         from ltx_pipelines.utils.constants import DISTILLED_SIGMA_VALUES, STAGE_2_DISTILLED_SIGMA_VALUES
         from ltx_pipelines.utils.denoisers import SimpleDenoiser
-        from ltx_pipelines.utils.helpers import (
-            assert_resolution,
-            image_conditionings_by_replacing_latent,
-        )
+        from ltx_pipelines.utils.helpers import assert_resolution
         from ltx_pipelines.utils.media_io import decode_audio_from_file
         from ltx_pipelines.utils.types import ModalitySpec
 
@@ -152,8 +179,8 @@ class DistilledA2VPipeline:
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
         stage_1_w, stage_1_h = width // 2, height // 2
         stage_1_conditionings = self.image_conditioner(
-            lambda enc: image_conditionings_by_replacing_latent(
-                images=ltx_images,
+            lambda enc: encode_stage_image_conditionings(
+                ltx_images,
                 height=stage_1_h,
                 width=stage_1_w,
                 video_encoder=enc,
@@ -189,8 +216,8 @@ class DistilledA2VPipeline:
         # Stage 2: Full-resolution refinement with frozen audio.
         stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
         stage_2_conditionings = self.image_conditioner(
-            lambda enc: image_conditionings_by_replacing_latent(
-                images=ltx_images,
+            lambda enc: encode_stage_image_conditionings(
+                ltx_images,
                 height=height,
                 width=width,
                 video_encoder=enc,

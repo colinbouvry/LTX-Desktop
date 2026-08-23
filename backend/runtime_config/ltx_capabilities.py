@@ -19,6 +19,7 @@ LtxCapabilityFeature = Literal[
     "ic_lora",
     "retake",
     "extend",
+    "multi_keyframe",
     "user_loras",
     "camera_motion",
     "auto_duration",
@@ -34,6 +35,8 @@ class LtxOfferingCapabilities:
     ic_lora: bool
     retake: bool
     extend: bool
+    multi_keyframe: bool
+    multi_keyframe_max_count: int
     user_loras: bool
     camera_motion: bool
     # t2v/i2v only: send duration=null and the cloud worker picks length from the prompt.
@@ -76,6 +79,8 @@ _LOCAL_2_3 = LocalOfferingCapabilities(
     ic_lora=True,
     retake=True,
     extend=True,
+    multi_keyframe=True,
+    multi_keyframe_max_count=5,
     user_loras=True,
     camera_motion=True,
     auto_duration=False,
@@ -85,13 +90,16 @@ _LOCAL_2_3 = LocalOfferingCapabilities(
 # DistilledA2V is wired for local 2.5. Auto duration is DurationHead on the
 # distilled checkpoint (t2v/i2v; A2V length comes from the audio). Advertised
 # only when those weights are on disk — see effective_local_caps().
+# Retake/Extend match API 2.5 (unsupported); local 2.3 still offers both.
 _LOCAL_2_5 = LocalOfferingCapabilities(
     t2v=True,
     i2v=True,
     a2v=True,
     ic_lora=True,
-    retake=True,
-    extend=True,
+    retake=False,
+    extend=False,
+    multi_keyframe=True,
+    multi_keyframe_max_count=5,
     user_loras=True,
     camera_motion=True,
     auto_duration=True,
@@ -107,6 +115,8 @@ _API_FAST = ApiOfferingCapabilities(
     ic_lora=False,
     retake=False,
     extend=False,
+    multi_keyframe=False,
+    multi_keyframe_max_count=0,
     user_loras=False,
     camera_motion=False,
     auto_duration=False,
@@ -120,6 +130,8 @@ _API_FAST_2_5 = ApiOfferingCapabilities(
     ic_lora=False,
     retake=False,
     extend=False,
+    multi_keyframe=False,
+    multi_keyframe_max_count=0,
     user_loras=False,
     camera_motion=False,
     auto_duration=True,
@@ -133,6 +145,8 @@ _API_PRO = ApiOfferingCapabilities(
     ic_lora=False,
     retake=True,
     extend=True,
+    multi_keyframe=False,
+    multi_keyframe_max_count=0,
     user_loras=False,
     camera_motion=True,
     auto_duration=False,
@@ -148,6 +162,8 @@ _API_PRO_2_5 = ApiOfferingCapabilities(
     ic_lora=False,
     retake=False,
     extend=False,
+    multi_keyframe=False,
+    multi_keyframe_max_count=0,
     user_loras=False,
     camera_motion=True,
     auto_duration=True,
@@ -208,6 +224,8 @@ def supports(caps: LtxOfferingCapabilities, feature: LtxCapabilityFeature) -> bo
             return caps.retake
         case "extend":
             return caps.extend
+        case "multi_keyframe":
+            return caps.multi_keyframe
         case "user_loras":
             return caps.user_loras
         case "camera_motion":

@@ -1,14 +1,17 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
+import { Group, Panel, Separator } from 'react-resizable-panels'
 import {
   Trash2, Download, Image, Video, X,
   Heart, Film, Volume2, VolumeX, Sparkles, Sparkle,
   Clock, Monitor, ChevronUp, Scissors, Music, Undo2, Redo2, Loader2,
-  MoveHorizontal, Wand2, Square
+  MoveHorizontal, Wand2, Square, Rows3
 } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import type { GenSpaceRetakeSource } from '../contexts/ProjectContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 import { useGeneration, GENERATION_RECOVERY_KEY, type GenerationRecoveryContext } from '../hooks/use-generation'
+import { useFixedMenu } from '../hooks/use-fixed-menu'
 import { setActiveGenerationOwner, hasValidBaselineId } from '../lib/generation-recovery'
 import { withGenerationActive, canCancelLocalJob } from '../lib/generation-active'
 import { useVideoGenerationModelSpecs } from '../hooks/use-video-generation-model-specs'
@@ -27,7 +30,7 @@ import { useDevFlags } from '../contexts/DevFlagsContext'
 import { type IcLoraListItem } from '../hooks/use-catalog'
 import { useIcLoraLibrary } from '../hooks/use-ic-lora-library'
 import { useLoraLibrary } from '../hooks/use-lora-library'
-import { usePromptEnhancerProvider } from '../hooks/use-prompt-enhancer-provider'
+import { usePromptEnhancerProvider, type EnhanceProvider } from '../hooks/use-prompt-enhancer-provider'
 import { useGlobalGenerationLock } from '../hooks/use-global-generation-lock'
 import type { ICLoraConditioningType } from '../components/ICLoraPanel'
 import type { Asset } from '../types/project-model'
@@ -53,6 +56,8 @@ import { ApiClient, type ApiSuccessOf } from '../lib/api-client'
 import type { GenerationSettings, LoraSelection } from '../components/SettingsPanel'
 import { RetakePanel } from '../components/RetakePanel'
 import { ExtendPanel } from '../components/ExtendPanel'
+import { KeyframePreview } from '../components/KeyframePreview'
+import { MultiKeyframePanel } from '../components/MultiKeyframePanel'
 import { ICLoraPanel, CONDITIONING_TYPES } from '../components/ICLoraPanel'
 import type { OutpaintPads } from '../components/OutpaintCanvasEditor'
 import { LoraLibraryModal } from '../components/LoraLibraryModal'
@@ -63,10 +68,29 @@ import { IcLoraSettingsControls, type IcLoraControlsProps } from '../components/
 import { IcLoraAdvancedPanel } from '../components/IcLoraAdvancedPanel'
 import { FreeApiKeyBubble } from '../components/FreeApiKeyBubble'
 import { shouldShowGeneratingTile } from '../lib/genspace-gallery'
+import { shouldShowLastFrameChip } from '../lib/genspace-last-frame'
+import {
+  GEMINI_KEY_REQUIRED_SETTINGS_DETAIL,
+  isEnhanceBlockedByMissingGeminiKey,
+} from '../lib/enhance-gemini-key'
+import {
+  autoDurationOptionVisible,
+  canUseMultiKeyframeMode,
+  fallbackGenSpaceMode,
+  genSpaceUsesAudioInput,
+  isGenSpaceLibraryMode,
+  isEnhanceAvailableForMode,
+  modeAfterCompletedGeneration,
+  modeOptionValues,
+  type GenSpaceMode,
+} from '../lib/genspace-multi-keyframe'
+import { applyKeyframeImagePaths, enhanceKeyframesPayload, fromPersistedKeyframes, toPersistedKeyframes, videoGenerationModeFromInputs, type KeyframeItem } from '../lib/multi-keyframe'
+import { lastFrameFromDuration, previewKeyframeForPlayhead, retimeKeyframesForSettings, sameDraggedFrame, type DraggedFrame } from '../lib/keyframe-timeline'
 import { GenSpaceFilterEmptyState } from './genspace/GenSpaceFilterEmptyState'
 import { GenSpaceGalleryToolbar } from './genspace/GenSpaceGalleryToolbar'
 import { gallerySizeClasses, type GallerySize } from './genspace/GenSpaceGallerySizeMenu'
 import { useGenSpaceGallery } from './genspace/useGenSpaceGallery'
+import { useGenSpacePromptBarHeight } from './genspace/useGenSpacePromptBarHeight'
 
 // Asset card with hover overlays
 function AssetCard({
@@ -368,17 +392,7 @@ function LoRAPicker({
   // enhance with no catalog awareness at all.
   catalogIdsByPath?: Map<string, string>
 }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!isOpen) return
-    const onClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setIsOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [isOpen])
+  const { isOpen, setIsOpen, triggerRef, menuRef, style } = useFixedMenu('above')
 
   const nameFor = (lora: ApiSuccessOf<'listModels'>['models'][0]) => displayNames?.get(lora.path) ?? lora.name
 
@@ -402,7 +416,7 @@ function LoRAPicker({
   const label = selected.length === 0 ? 'LoRA' : selected.length === 1 ? selected[0].name : `${selected.length} LoRAs`
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={triggerRef} className="relative">
       <button
         onClick={() => setIsOpen(o => !o)}
         className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-zinc-800/60 text-zinc-300 text-xs hover:bg-zinc-700/60 transition-colors max-w-[160px]"
@@ -410,8 +424,12 @@ function LoRAPicker({
         <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />
         <span className="truncate">{label}</span>
       </button>
-      {isOpen && (
-        <div className="absolute bottom-full mb-1 left-0 z-50 w-72 max-h-80 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+      {isOpen && createPortal(
+        <div
+          ref={menuRef}
+          style={style}
+          className="fixed w-72 max-h-80 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl"
+        >
           <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-zinc-500 border-b border-zinc-800">
             Select LoRAs
           </div>
@@ -445,13 +463,12 @@ function LoRAPicker({
               </div>
             )
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
 }
-
-type GenSpaceMode = 'image' | 'video' | 'retake' | 'extend' | 'ic-lora'
 
 // Resolve a selected resolution option key to {width,height}, or undefined for "original"
 // (backend then uses the source resolution).
@@ -466,6 +483,7 @@ function resolveResolution(options: ResolutionOption[], key: string): { width: n
 function PromptBar({
   mode,
   onModeChange,
+  canUseMultiKeyframe,
   canUseIcLora,
   canUseRetake,
   canUseExtend,
@@ -478,8 +496,16 @@ function PromptBar({
   isCancelling,
   inputImage,
   onInputImageChange,
+  inputLastImage,
+  onInputLastImageChange,
   inputAudio,
   onInputAudioChange,
+  keyframes,
+  onKeyframesChange,
+  multiKeyframeMaxCount,
+  playheadFrame,
+  onPlayheadChange,
+  onDragFrameChange,
   settings,
   onSettingsChange,
   videoModelSpecs,
@@ -505,9 +531,9 @@ function PromptBar({
   onSelectedLorasChange,
   loraDisplayNames,
   loraCatalogIdsByPath,
-  enhanceProviderAvailable,
   enhanceAvailableForMode,
   canEnhancePrompt,
+  enhanceBlockedByMissingGeminiKey,
   isEnhancingPrompt,
   enhancePromptError,
   onEnhancePrompt,
@@ -520,6 +546,7 @@ function PromptBar({
 }: {
   mode: GenSpaceMode
   onModeChange: (mode: GenSpaceMode) => void
+  canUseMultiKeyframe: boolean
   canUseIcLora: boolean
   canUseRetake: boolean
   canUseExtend: boolean
@@ -546,8 +573,16 @@ function PromptBar({
   onRetakeExtendModelChange?: (model: RetakeExtendModel) => void
   inputImage: string | null
   onInputImageChange: (path: string | null) => void
+  inputLastImage: string | null
+  onInputLastImageChange: (path: string | null) => void
   inputAudio: string | null
   onInputAudioChange: (path: string | null) => void
+  keyframes: readonly KeyframeItem[]
+  onKeyframesChange: (keyframes: KeyframeItem[]) => void
+  multiKeyframeMaxCount: number
+  playheadFrame: number
+  onPlayheadChange: (frameIndex: number) => void
+  onDragFrameChange: (drag: DraggedFrame | null) => void
   settings: {
     model: string
     duration: number | null
@@ -571,18 +606,17 @@ function PromptBar({
   onSelectedLorasChange?: (loras: LoraSelection[]) => void
   loraDisplayNames?: Map<string, string>
   loraCatalogIdsByPath?: Map<string, string>
-  // Whether at least one enhancer provider (local Gemma text encoder or Gemini API) is usable.
-  enhanceProviderAvailable?: boolean
   // Whether the current mode supports Enhance at all (independent of prompt text / in-flight
   // generation) — gates the whole Enhance/Undo/Redo cluster's visibility.
   enhanceAvailableForMode?: boolean
   canEnhancePrompt?: boolean
+  enhanceBlockedByMissingGeminiKey?: boolean
   isEnhancingPrompt?: boolean
   enhancePromptError?: string | null
   onEnhancePrompt?: () => void
-  // The dropdown is only rendered when this is passed — the parent omits it (locking the
-  // button to whichever single option works) unless both a local Gemma checkpoint and a
-  // Gemini API key are available.
+  // The dropdown is only rendered when this is passed — the parent omits it when local
+  // Enhance isn't available (the button is already API-only). API stays listed even without
+  // a Gemini key so picking it can open Settings.
   enhanceProvider?: 'local' | 'api'
   onEnhanceProviderChange?: (provider: 'local' | 'api') => void
   canUndoPrompt?: boolean
@@ -590,14 +624,23 @@ function PromptBar({
   canRedoPrompt?: boolean
   onRedoPrompt?: () => void
 }) {
+  const enhanceDisabled = (!canEnhancePrompt && !enhanceBlockedByMissingGeminiKey) || !!isEnhancingPrompt
   const inputRef = useRef<HTMLInputElement>(null)
+  const lastFrameInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [isLastDragOver, setIsLastDragOver] = useState(false)
   const [isAudioDragOver, setIsAudioDragOver] = useState(false)
   const isRetake = mode === 'retake'
   const isExtend = mode === 'extend'
   const isIcLora = mode === 'ic-lora'
   const isEditingImage = mode === 'image' && !!inputImage
+  const availableModeValues = modeOptionValues({
+    canUseMultiKeyframe,
+    canUseRetake,
+    canUseExtend,
+    canUseIcLora,
+  })
 
   // Resolution selector: local only, and only when there's a lower tier to pick.
   const showResolution = isLocalMode && !!resolutionOpts && resolutionOpts.length > 1
@@ -639,11 +682,11 @@ function PromptBar({
       }
     />
   ) : null
-  const resolvedVideoOptions = mode === 'video'
+  const resolvedVideoOptions = mode === 'video' || mode === 'multi-keyframe'
     ? resolveVideoGenerationOptions({
         settings,
         modelSpecs: videoModelSpecs,
-        hasAudio: Boolean(inputAudio),
+        hasAudio: genSpaceUsesAudioInput(mode) && Boolean(inputAudio),
         minimumDuration: isLocalMode ? undefined : GENSPACE_MIN_SELECTABLE_DURATION_S,
       })
     : null
@@ -652,6 +695,15 @@ function PromptBar({
     && resolvedVideoOptions.hasCompatibleOptions
     && resolvedVideoOptions.fpsOptions.length > 1,
   )
+  const showAutoDurationOption = Boolean(
+    resolvedVideoOptions
+    && autoDurationOptionVisible(mode, resolvedVideoOptions.autoDurationAvailable),
+  )
+  const selectedDuration = showAutoDurationOption && resolvedVideoOptions?.selectedDuration === null
+    ? null
+    : resolvedVideoOptions?.selectedDuration
+      ?? resolvedVideoOptions?.durationOptions[0]
+      ?? settings.duration
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
@@ -721,6 +773,38 @@ function PromptBar({
       }
     }
   }
+
+  const handleLastDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsLastDragOver(false)
+
+    const assetData = e.dataTransfer.getData('asset')
+    if (assetData) {
+      const asset = JSON.parse(assetData) as Asset
+      if (asset.type === 'image') {
+        onInputLastImageChange(asset.path)
+      }
+      return
+    }
+
+    const file = e.dataTransfer.files?.[0]
+    if (file && file.type.startsWith('image/')) {
+      const filePath = window.electronAPI?.getPathForFile(file)
+      if (filePath) {
+        onInputLastImageChange(filePath)
+      }
+    }
+  }
+
+  const handleLastFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && file.type.startsWith('image/')) {
+      const filePath = window.electronAPI?.getPathForFile(file)
+      if (filePath) {
+        onInputLastImageChange(filePath)
+      }
+    }
+  }
   
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey && !isGenerating && canGenerate && !isEnhancingPrompt) {
@@ -734,13 +818,25 @@ function PromptBar({
   const generateDisabled = isGenerating || !canGenerate || isEnhancingPrompt
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-visible">
+    <div className="h-full min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-2xl overflow-visible">
+      {mode === 'multi-keyframe' && (
+        <MultiKeyframePanel
+          keyframes={keyframes}
+          duration={resolvedVideoOptions?.selectedDuration ?? settings.duration}
+          fps={resolvedVideoOptions?.selectedFps ?? settings.fps}
+          maxCount={multiKeyframeMaxCount}
+          playheadFrame={playheadFrame}
+          onPlayheadChange={onPlayheadChange}
+          onChange={onKeyframesChange}
+          onDragFrameChange={onDragFrameChange}
+        />
+      )}
       {/* Top row: Image ref | Prompt | Generate */}
-      <div className="flex items-start">
+      <div className="flex-1 min-h-0 flex items-stretch">
         {/* Input image drop zone — video mode (I2V) or image mode (edit source) */}
         {(mode === 'video' || mode === 'image') && !isRetake && !isIcLora && (
           <div
-            className={`relative w-10 h-10 mx-2 mt-2 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer ${
+            className={`relative w-10 h-10 mx-2 mt-2 self-start rounded-lg border-2 border-dashed transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer ${
               isDragOver ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-700 hover:border-zinc-500'
             }`}
             onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
@@ -752,7 +848,11 @@ function PromptBar({
               <>
                 <img src={pathToFileUrl(inputImage)} alt="" className="w-full h-full object-cover rounded-md" />
                 <button
-                  onClick={(e) => { e.stopPropagation(); onInputImageChange(null) }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onInputImageChange(null)
+                    onInputLastImageChange(null)
+                  }}
                   className="absolute -top-1 -right-1 p-0.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-white z-10"
                 >
                   <X className="h-3 w-3" />
@@ -771,10 +871,48 @@ function PromptBar({
           </div>
         )}
 
-        {/* Audio drop zone — only in video mode */}
-        {mode === 'video' && !isRetake && !isIcLora && (
+        {shouldShowLastFrameChip({
+          mode,
+          hasFirstFrame: Boolean(inputImage),
+          duration: settings.duration,
+        }) && !isRetake && !isIcLora && (
           <div
-            className={`relative w-10 h-10 mt-2 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer ${
+            className={`relative w-10 h-10 mt-2 mr-2 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer ${
+              isLastDragOver ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-700 hover:border-zinc-500'
+            }`}
+            title="Last frame"
+            onDragOver={(e) => { e.preventDefault(); setIsLastDragOver(true) }}
+            onDragLeave={() => setIsLastDragOver(false)}
+            onDrop={handleLastDrop}
+            onClick={() => lastFrameInputRef.current?.click()}
+          >
+            {inputLastImage ? (
+              <>
+                <img src={pathToFileUrl(inputLastImage)} alt="" className="w-full h-full object-cover rounded-md" />
+                <button
+                  onClick={(e) => { e.stopPropagation(); onInputLastImageChange(null) }}
+                  className="absolute -top-1 -right-1 p-0.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-white z-10"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </>
+            ) : (
+              <Image className="h-4 w-4 text-zinc-500" />
+            )}
+            <input
+              ref={lastFrameInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleLastFileSelect}
+              className="hidden"
+            />
+          </div>
+        )}
+
+        {/* Audio drop zone — A2V is mutually exclusive with multi-keyframe */}
+        {genSpaceUsesAudioInput(mode) && !isRetake && !isIcLora && (
+          <div
+            className={`relative w-10 h-10 mt-2 self-start rounded-lg border-2 border-dashed transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer ${
               isAudioDragOver ? 'border-emerald-500 bg-emerald-500/10' : inputAudio ? 'border-emerald-600' : 'border-zinc-700 hover:border-zinc-500'
             }`}
             onDragOver={(e) => { e.preventDefault(); setIsAudioDragOver(true) }}
@@ -806,8 +944,8 @@ function PromptBar({
           </div>
         )}
 
-        {/* Prompt input - fills remaining width */}
-        <div className="flex-1 min-w-0 py-1">
+        {/* Prompt input - fills remaining width and grows with the panel */}
+        <div className="flex-1 min-h-0 min-w-0 py-1">
           <textarea
             value={prompt}
             onChange={(e) => onPromptChange(e.target.value)}
@@ -826,14 +964,14 @@ function PromptBar({
                     : "A close-up of a woman talking on the phone...")
                 : "The woman sips from a cup of coffee..."
             }
-            className="w-full bg-transparent text-white text-sm placeholder:text-zinc-500 focus:outline-none px-2 py-2 resize-none overflow-y-auto h-[70px] leading-5"
+            className="w-full h-full min-h-0 bg-transparent text-white text-sm placeholder:text-zinc-500 focus:outline-none px-2 py-2 resize-none overflow-y-auto leading-5"
           />
         </div>
 
       </div>
       
       {/* Bottom row: Mode selector + Settings */}
-      <div className="flex items-center gap-0.5 px-1.5 py-1.5 border-t border-zinc-800/60 text-xs text-zinc-400">
+      <div className="flex flex-shrink-0 items-center gap-0.5 px-1.5 py-1.5 border-t border-zinc-800/60 text-xs text-zinc-400">
         {/* Mode dropdown */}
         <SettingsDropdown
           title="MODE"
@@ -842,14 +980,15 @@ function PromptBar({
           options={[
             { value: 'image', label: 'Generate Images', icon: <Image className="h-4 w-4" /> },
             { value: 'video', label: 'Generate Videos', icon: <Video className="h-4 w-4" /> },
-            ...(canUseRetake ? [{ value: 'retake', label: 'Retake', icon: <Scissors className="h-4 w-4" /> }] : []),
-            ...(canUseExtend ? [{ value: 'extend', label: 'Extend', icon: <MoveHorizontal className="h-4 w-4" /> }] : []),
-            ...(canUseIcLora ? [{ value: 'ic-lora', label: 'IC-LoRA', icon: <Sparkles className="h-4 w-4" /> }] : []),
-          ]}
+            { value: 'multi-keyframe', label: 'Generate Multi Keyframes Videos', icon: <Rows3 className="h-4 w-4" /> },
+            { value: 'retake', label: 'Retake', icon: <Scissors className="h-4 w-4" /> },
+            { value: 'extend', label: 'Extend', icon: <MoveHorizontal className="h-4 w-4" /> },
+            { value: 'ic-lora', label: 'IC-LoRA', icon: <Sparkles className="h-4 w-4" /> },
+          ].filter((option) => availableModeValues.includes(option.value as GenSpaceMode))}
           trigger={
             <>
-              {mode === 'image' ? <Image className="h-3.5 w-3.5" /> : mode === 'retake' ? <Scissors className="h-3.5 w-3.5" /> : mode === 'extend' ? <MoveHorizontal className="h-3.5 w-3.5" /> : mode === 'ic-lora' ? <Sparkles className="h-3.5 w-3.5" /> : <Video className="h-3.5 w-3.5" />}
-              <span className="text-zinc-300 font-medium">{mode === 'image' ? 'Image' : mode === 'retake' ? 'Retake' : mode === 'extend' ? 'Extend' : mode === 'ic-lora' ? 'IC-LoRA' : 'Video'}</span>
+              {mode === 'image' ? <Image className="h-3.5 w-3.5" /> : mode === 'multi-keyframe' ? <Rows3 className="h-3.5 w-3.5" /> : mode === 'retake' ? <Scissors className="h-3.5 w-3.5" /> : mode === 'extend' ? <MoveHorizontal className="h-3.5 w-3.5" /> : mode === 'ic-lora' ? <Sparkles className="h-3.5 w-3.5" /> : <Video className="h-3.5 w-3.5" />}
+              <span className="text-zinc-300 font-medium">{mode === 'image' ? 'Image' : mode === 'multi-keyframe' ? 'Multi Keyframes' : mode === 'retake' ? 'Retake' : mode === 'extend' ? 'Extend' : mode === 'ic-lora' ? 'IC-LoRA' : 'Video'}</span>
               <ChevronUp className="h-3 w-3 text-zinc-500" />
             </>
           }
@@ -1005,17 +1144,13 @@ function PromptBar({
 
                 <SettingsDropdown
                   title="DURATION"
-                  value={
-                    resolvedVideoOptions.autoDurationAvailable && resolvedVideoOptions.selectedDuration === null
-                      ? 'auto'
-                      : String(resolvedVideoOptions.selectedDuration ?? settings.duration)
-                  }
+                  value={selectedDuration === null ? 'auto' : String(selectedDuration)}
                   onChange={(v) => onSettingsChange({
                     ...settings,
                     duration: v === 'auto' ? null : parseInt(v),
                   })}
                   options={[
-                    ...(resolvedVideoOptions.autoDurationAvailable
+                    ...(showAutoDurationOption
                       ? [{ value: 'auto', label: 'Auto' }]
                       : []),
                     ...resolvedVideoOptions.durationOptions.map((value) => ({
@@ -1027,9 +1162,7 @@ function PromptBar({
                     <>
                       <Clock className="h-3.5 w-3.5" />
                       <span>
-                        {resolvedVideoOptions.autoDurationAvailable && resolvedVideoOptions.selectedDuration === null
-                          ? 'Auto'
-                          : `${resolvedVideoOptions.selectedDuration ?? settings.duration}s`}
+                        {selectedDuration === null ? 'Auto' : `${selectedDuration}s`}
                       </span>
                     </>
                   }
@@ -1086,7 +1219,7 @@ function PromptBar({
                   }
                 />
 
-                {isLocalMode && canUseUserLoras && availableLoras && availableLoras.length > 0 && (
+                {mode === 'video' && isLocalMode && canUseUserLoras && availableLoras && availableLoras.length > 0 && (
                   <LoRAPicker
                     available={availableLoras}
                     selected={selectedLoras ?? []}
@@ -1104,10 +1237,10 @@ function PromptBar({
           </>
         )}
         
-        {/* Catalog-aware prompt enhancer — video/IC-LoRA (local-generation-only) or image
-            (generation/editing, any backend). Runs either the local Gemma text encoder or, if
-            available, Gemini's hosted API. */}
-        {enhanceAvailableForMode && enhanceProviderAvailable && (
+        {/* Catalog-aware prompt enhancer — video/multi-keyframe/IC-LoRA (local-generation-only)
+            or image (generation/editing, any backend). Runs either the local Gemma text encoder
+            or, if available, Gemini's hosted API. */}
+        {enhanceAvailableForMode && (
           <>
             {(canUndoPrompt || canRedoPrompt) && (
               <>
@@ -1135,12 +1268,12 @@ function PromptBar({
               <button
                 type="button"
                 onClick={onEnhancePrompt}
-                disabled={!canEnhancePrompt || isEnhancingPrompt}
+                disabled={enhanceDisabled}
                 title={enhancePromptError ?? 'Enhance prompt'}
                 className={`flex items-center gap-1 px-2 py-1.5 text-xs font-medium ${
                   onEnhanceProviderChange ? 'rounded-l-md' : 'rounded-md'
                 } ${
-                  !canEnhancePrompt || isEnhancingPrompt
+                  enhanceDisabled
                     ? 'text-zinc-600 cursor-not-allowed'
                     : enhancePromptError
                       ? 'text-red-400 hover:bg-red-950/40'
@@ -1175,7 +1308,7 @@ function PromptBar({
         <button
           onClick={showStop ? onStop : onGenerate}
           disabled={showStop ? stopDisabled : generateDisabled}
-          className={`flex items-center gap-1.5 ml-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all flex-shrink-0 ${
+          className={`flex items-center gap-1.5 ml-2 mt-2 self-start px-3 py-1.5 rounded-md text-xs font-medium transition-all flex-shrink-0 ${
             showStop
               ? stopDisabled
                 ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed'
@@ -1251,10 +1384,22 @@ export function GenSpace() {
   const [promptHistory, setPromptHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [inputImage, setInputImage] = useState<string | null>(null)
+  const [inputLastImage, setInputLastImage] = useState<string | null>(null)
   const [inputAudio, setInputAudio] = useState<string | null>(null)
+  const [keyframes, setKeyframes] = useState<KeyframeItem[]>([])
+  const [playheadFrame, setPlayheadFrame] = useState(0)
+  const [dragFrame, setDragFrame] = useState<DraggedFrame | null>(null)
   const [localError, setLocalError] = useState<GenerationError | null>(null)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
   const [gallerySize, setGallerySize] = useState<GallerySize>('medium')
+  const {
+    initialHeight: promptBarInitialHeight,
+    promptBarHeight,
+    panelRef: promptBarPanelRef,
+    persistHeight: persistPromptBarHeight,
+    resetHeight: resetPromptBarHeight,
+    limits: promptBarHeightLimits,
+  } = useGenSpacePromptBarHeight()
   const persistedVideoKeyRef = useRef<string | null>(null)
   const retakeSubmissionRef = useRef<{
     prompt: string
@@ -1287,9 +1432,15 @@ export function GenSpace() {
     settings: GenerationSettings
     modelLabel?: string
     inputImageUrl: string | null
+    inputLastImageUrl: string | null
     inputAudioUrl: string | null
+    keyframes?: KeyframeItem[]
   } | null>(null)
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_VIDEO_SETTINGS }))
+  const previousTimelineSettingsRef = useRef({
+    duration: settings.duration,
+    fps: settings.fps,
+  })
   const videoModelSpecs = getVideoGenerationModelSpecs(videoGenerationModelSpecsResponse, {
     useApiSpecs: shouldVideoGenerateWithLtxApi,
   })
@@ -1299,11 +1450,15 @@ export function GenSpace() {
       ? `Could not load generation settings: ${videoGenerationModelSpecsErrorMessage}`
       : null
   const sanitizeVideoSettings = useCallback(
-    (next: typeof settings) => {
-      if (mode !== 'video' || videoModelSpecs.length === 0) return next
+    (
+      next: typeof settings,
+      durationSelection: 'preserve' | 'smallest_valid' = 'preserve',
+    ) => {
+      if ((mode !== 'video' && mode !== 'multi-keyframe') || videoModelSpecs.length === 0) return next
       return sanitizeVideoGenerationSettings(next, videoModelSpecs, {
-        hasAudio: Boolean(inputAudio),
+        hasAudio: genSpaceUsesAudioInput(mode) && Boolean(inputAudio),
         minimumDuration: shouldVideoGenerateWithLtxApi ? GENSPACE_MIN_SELECTABLE_DURATION_S : undefined,
+        durationSelection,
       }) ?? next
     },
     [inputAudio, mode, shouldVideoGenerateWithLtxApi, videoModelSpecs],
@@ -1334,6 +1489,7 @@ export function GenSpace() {
     RETAKE_EXTEND_MODELS[0],
   )
   const canUseUserLoras = isLocalMode && Boolean(localCaps?.user_loras)
+  const multiKeyframeMaxCount = localCaps?.multi_keyframe_max_count ?? 5
   const canUseIcLora = !forceApiGenerations && Boolean(localCaps?.ic_lora)
   const canUseRetake = isLocalMode ? Boolean(localCaps?.retake) : Boolean(apiCaps?.retake)
   const canUseExtend = isLocalMode ? Boolean(localCaps?.extend) : Boolean(apiCaps?.extend)
@@ -1341,14 +1497,15 @@ export function GenSpace() {
   // endpoint only cares about the enhancer provider (local Gemma vs. Gemini), not whether video
   // generation runs locally or via the LTX API. If no catalog LoRA is selected (e.g. because the
   // LoRA picker is local-only), it just falls back to a generic rewrite. "retake"/"extend" have
-  // no prompt input, so they're excluded.
-  const enhanceAvailableForMode = mode === 'video' || mode === 'ic-lora' || mode === 'image'
+  // no prompt input, so they're excluded. Multi-keyframe uses the same video enhance path, driven
+  // by timeline stills (and optional prompt text).
+  const enhanceAvailableForMode = isEnhanceAvailableForMode(mode)
   // The prompt enhancer can run the local Gemma text encoder OR Gemini's hosted API — this hook
   // tracks which of those is actually available (not just which the user prefers) and picks
   // whichever provider Enhance should use. Refetched whenever the user is in a mode the button
   // could appear in, so downloading the checkpoint from Settings and coming back here picks it up.
   const {
-    isAvailable: isEnhancerProviderAvailable,
+    hasGeminiApiKey,
     provider: enhanceProvider,
     canToggleProvider: canToggleEnhanceProvider,
     setProviderPreference: setEnhanceProviderPref,
@@ -1368,7 +1525,12 @@ export function GenSpace() {
 
   // IC-LoRA mode: a downloadable curated IC-LoRA that resolves its own weights and builds
   // the control video server-side. When an IC-LoRA is selected, it supersedes canny/depth/custom.
-  const { advancedIcLoraControls } = useDevFlags().flags
+  const { enableMultipleKeyframesVideos, advancedIcLoraControls } = useDevFlags().flags
+  const canUseMultiKeyframe = canUseMultiKeyframeMode({
+    isLocalMode,
+    localCaps,
+    enableMultipleKeyframesVideos,
+  })
   // Values for the selected IC-LoRA's catalog controls, keyed by control id. Seeded from each
   // control's default on selection; the settings row renders + edits them generically.
   const [controlValues, setControlValues] = useState<Record<string, number | string>>({})
@@ -1680,22 +1842,60 @@ export function GenSpace() {
 
   useEffect(() => {
     if (isLoadingVideoGenerationModelSpecs) return
-    if (mode === 'ic-lora' && !canUseIcLora) setMode('video')
-    if (mode === 'retake' && !canUseRetake) setMode('video')
-    if (mode === 'extend' && !canUseExtend) setMode('video')
-  }, [canUseIcLora, canUseRetake, canUseExtend, mode, isLoadingVideoGenerationModelSpecs])
+    const fallbackMode = fallbackGenSpaceMode(mode, {
+      canUseMultiKeyframe,
+      canUseIcLora,
+      canUseRetake,
+      canUseExtend,
+    })
+    if (fallbackMode !== mode) setMode(fallbackMode)
+  }, [
+    canUseMultiKeyframe,
+    canUseIcLora,
+    canUseRetake,
+    canUseExtend,
+    mode,
+    isLoadingVideoGenerationModelSpecs,
+  ])
 
   useEffect(() => {
     if (!canUseUserLoras && selectedLoras.length > 0) setSelectedLoras([])
   }, [canUseUserLoras, selectedLoras.length])
 
   useEffect(() => {
-    if (mode !== 'video' || videoModelSpecs.length === 0) return
+    const previous = previousTimelineSettingsRef.current
+    const next = { duration: settings.duration, fps: settings.fps }
+
+    if (previous.duration === next.duration && previous.fps === next.fps) return
+
+    setKeyframes((current) => current.length === 0
+      ? current
+      : retimeKeyframesForSettings(current, previous, next))
+    previousTimelineSettingsRef.current = next
+  }, [settings.duration, settings.fps])
+
+  useEffect(() => {
+    if (settings.duration == null) return
+    const lastFrame = lastFrameFromDuration(settings.duration, settings.fps)
+    setPlayheadFrame((frame) => Math.min(frame, lastFrame))
+  }, [settings.duration, settings.fps])
+
+  useEffect(() => {
+    if ((mode !== 'video' && mode !== 'multi-keyframe') || videoModelSpecs.length === 0) return
     setSettings((prev) => {
-      const next = sanitizeVideoSettings(prev)
+      const next = sanitizeVideoSettings(
+        prev,
+        mode === 'multi-keyframe' && prev.duration === null ? 'smallest_valid' : 'preserve',
+      )
       return areVideoGenerationSettingsEquivalent(prev, next) ? prev : next
     })
   }, [mode, sanitizeVideoSettings, videoModelSpecs.length])
+
+  useEffect(() => {
+    if (mode !== 'video' || settings.duration == null || !inputImage) {
+      setInputLastImage(null)
+    }
+  }, [mode, settings.duration, inputImage])
 
   useEffect(() => {
     if (retakeError) {
@@ -1792,10 +1992,16 @@ export function GenSpace() {
       if (!s) {
         setMode('video')
       } else {
-        setMode(ctx.genType === 'image' ? 'image' : 'video')
+        setMode(ctx.genType === 'image' ? 'image' : ctx.keyframes?.length ? 'multi-keyframe' : 'video')
         setInputImage(ctx.inputImageUrl ?? null)
+        setInputLastImage(ctx.inputLastImageUrl ?? null)
         setInputAudio(ctx.inputAudioUrl ?? null)
+        setKeyframes(fromPersistedKeyframes(ctx.keyframes ?? []))
         setSelectedLoras(s.loras ?? [])
+        // Restored stills already use this clip's frame grid (e.g. 10s last
+        // frame 240). Adopt before setSettings so the retime effect does not
+        // treat remount's default 5s as the previous clip and bunch them.
+        previousTimelineSettingsRef.current = { duration: s.duration, fps: s.fps }
         setSettings(prev => ({
           ...prev,
           model: s.model,
@@ -1814,7 +2020,9 @@ export function GenSpace() {
           settings: s,
           modelLabel: ctx.modelLabel,
           inputImageUrl: ctx.inputImageUrl ?? null,
+          inputLastImageUrl: ctx.inputLastImageUrl ?? null,
           inputAudioUrl: ctx.inputAudioUrl ?? null,
+          keyframes: fromPersistedKeyframes(ctx.keyframes ?? []),
         }
         // The completion effect reads this ref (not settings/inputImage) to tag a
         // recovered image asset as an edit — restore it so recovery matches the
@@ -1861,10 +2069,14 @@ export function GenSpace() {
           imageEditStrength: settings.imageEditStrength,
         }
     const usedImage = submission?.kind === 'video' ? submission.inputImageUrl : inputImage
+    const usedLastImage = submission?.kind === 'video' ? submission.inputLastImageUrl : inputLastImage
     const usedAudio = submission?.kind === 'video' ? submission.inputAudioUrl : inputAudio
-    const genMode = usedAudio
-      ? 'audio-to-video'
-      : usedImage ? 'image-to-video' : 'text-to-video'
+    const usedKeyframes = submission?.kind === 'video' ? submission.keyframes : keyframes
+    const genMode = videoGenerationModeFromInputs({
+      keyframes: usedKeyframes,
+      audioUrl: usedAudio,
+      imageUrl: usedImage,
+    })
 
     ;(async () => {
       try {
@@ -1881,7 +2093,7 @@ export function GenSpace() {
           resolution: usedSettings.videoResolution,
           duration: usedSettings.duration ?? undefined,
           generationParams: {
-            mode: genMode as 'text-to-video' | 'image-to-video' | 'audio-to-video',
+            mode: genMode,
             prompt: usedPrompt,
             model: usedSettings.model,
             modelLabel: (submission?.kind === 'video' ? submission.modelLabel : undefined)
@@ -1895,7 +2107,11 @@ export function GenSpace() {
             imageAspectRatio: usedSettings.aspectRatio,
             imageSteps: 4,
             inputImageUrl: usedImage || undefined,
+            inputLastImageUrl: usedLastImage || undefined,
             inputAudioUrl: usedAudio || undefined,
+            keyframes: usedKeyframes && usedKeyframes.length > 0
+              ? toPersistedKeyframes(usedKeyframes)
+              : undefined,
             loras: usedSettings.loras && usedSettings.loras.length > 0
               ? usedSettings.loras.map(l => ({ ...l, ref: toModelsDirRelativeRef(l.ref, appSettings.modelsDir) }))
               : undefined,
@@ -1912,12 +2128,14 @@ export function GenSpace() {
         })
         generateSubmissionRef.current = null
         reset()
+        const nextMode = modeAfterCompletedGeneration(genMode)
+        if (nextMode) setMode(nextMode)
       } catch (err) {
         persistedVideoKeyRef.current = null
         logger.error(`Failed to persist generated video asset: ${err}`)
       }
     })()
-  }, [videoPath, currentProjectId, isGenerating, settings, inputImage, inputAudio, lastPrompt, addAsset, reset, appSettings.modelsDir, videoModelSpecs])
+  }, [videoPath, currentProjectId, isGenerating, settings, inputImage, inputLastImage, inputAudio, keyframes, lastPrompt, addAsset, reset, appSettings.modelsDir, videoModelSpecs, setMode])
 
   // When retake completes, add as take or new asset
   useEffect(() => {
@@ -2299,8 +2517,21 @@ export function GenSpace() {
     isCancelling: globalIsCancelling,
   } = useGlobalGenerationLock()
   const isGenerationInProgressForEnhance = mode === 'ic-lora' ? isIcLoraGenerating : isGenerating
-  const canEnhancePrompt = enhanceAvailableForMode && isEnhancerProviderAvailable
-    && prompt.trim().length > 0 && !isGenerationInProgressForEnhance && !isOtherGenerationRunning
+  const hasEnhanceText = prompt.trim().length > 0
+  const hasEnhanceImage = mode === 'multi-keyframe'
+    ? keyframes.length > 0
+    : (mode === 'video' || mode === 'image') && !!inputImage
+  const canEnhancePrompt = enhanceAvailableForMode
+    && (enhanceProvider === 'api' ? hasGeminiApiKey : true)
+    && (hasEnhanceText || hasEnhanceImage) && !isGenerationInProgressForEnhance && !isOtherGenerationRunning
+  const enhanceBlockedByMissingGeminiKey = isEnhanceBlockedByMissingGeminiKey({
+    enhanceAvailableForMode,
+    enhanceProvider,
+    hasGeminiApiKey,
+    hasEnhanceInput: hasEnhanceText || hasEnhanceImage,
+    isGenerationInProgressForEnhance,
+    isOtherGenerationRunning,
+  })
   const canUndoPrompt = historyIndex > 0
   const canRedoPrompt = historyIndex >= 0 && historyIndex < promptHistory.length - 1
 
@@ -2339,9 +2570,19 @@ export function GenSpace() {
 
     // inputImage is the image-edit/i2v reference and isn't cleared on mode change — only
     // meaningful in image mode or video's i2v; IC-LoRA's own reference is always a driving
-    // video (icLoraInput.videoPath), never this, so a leftover inputImage from an earlier
-    // image-mode/i2v session must not leak into an IC-LoRA (or plain t2v) enhance call.
-    const imagePathForEnhance = mode === 'image' || mode === 'video' ? inputImage ?? undefined : undefined
+    // video (icLoraInput.videoPath), never this. Multi-keyframe uses the timeline stills
+    // instead, so leftover first/last-frame chips must not leak into that enhance call.
+    const enhanceKeyframes = mode === 'multi-keyframe'
+      ? enhanceKeyframesPayload(keyframes)
+      : undefined
+    const imagePathForEnhance = mode === 'multi-keyframe'
+      ? undefined
+      : (mode === 'image' || mode === 'video' ? inputImage ?? undefined : undefined)
+    const lastImagePathForEnhance = mode === 'multi-keyframe'
+      ? undefined
+      : (mode === 'video' && imagePathForEnhance
+        ? inputLastImage ?? undefined
+        : undefined)
 
     // Local-provider Enhance runs the same GIL-holding Gemma text encoder as local video/image
     // generation (see electron/python-backend.ts) — needs the same liveness-kill suppression.
@@ -2351,12 +2592,25 @@ export function GenSpace() {
       icLoraId: mode === 'ic-lora' ? selectedIcLoraId ?? undefined : undefined,
       conditioningType,
       imagePath: imagePathForEnhance,
+      lastImagePath: lastImagePathForEnhance,
+      keyframes: enhanceKeyframes,
+      ...(mode === 'multi-keyframe'
+        ? {
+            duration: settings.duration ?? undefined,
+            fps: settings.fps,
+          }
+        : {}),
       provider: enhanceProvider,
       mediaType: mode === 'image' ? 'image' : 'video',
     }))
 
     setIsEnhancingPrompt(false)
     if (!result.ok) {
+      if (result.error.code === 'GEMINI_INVALID_API_KEY' || result.error.code === 'GEMINI_API_KEY_MISSING') {
+        window.dispatchEvent(new CustomEvent('open-settings', {
+          detail: GEMINI_KEY_REQUIRED_SETTINGS_DETAIL,
+        }))
+      }
       // Don't clear the marker here: this "failure" can just be our own fetch getting cut by a
       // refresh that's already in progress (backendFetch throws, api-client.ts reports it as a
       // synthetic NETWORK_ERROR) — the backend enhance call itself is a plain in-process Python
@@ -2371,12 +2625,27 @@ export function GenSpace() {
     logger.info('Enhance request succeeded, clearing recovery marker')
     localStorage.removeItem(GENERATION_RECOVERY_KEY)
     applyEnhanceResult(sourcePrompt, result.data.enhancedPrompt)
-  }, [isEnhancingPrompt, mode, selectedLoras, selectedIcLoraId, icLoraCondType, inputImage, enhanceProvider, applyEnhanceResult, writeRecoveryContext])
+  }, [isEnhancingPrompt, mode, selectedLoras, selectedIcLoraId, icLoraCondType, inputImage, inputLastImage, keyframes, settings.duration, settings.fps, enhanceProvider, applyEnhanceResult, writeRecoveryContext])
+
+  const handleEnhanceProviderChange = useCallback((provider: EnhanceProvider) => {
+    setEnhanceProviderPref(provider)
+    if (provider === 'api' && !hasGeminiApiKey) {
+      window.dispatchEvent(new CustomEvent('open-settings', {
+        detail: GEMINI_KEY_REQUIRED_SETTINGS_DETAIL,
+      }))
+    }
+  }, [setEnhanceProviderPref, hasGeminiApiKey])
 
   const handleEnhancePrompt = useCallback(() => {
+    if (enhanceBlockedByMissingGeminiKey) {
+      window.dispatchEvent(new CustomEvent('open-settings', {
+        detail: GEMINI_KEY_REQUIRED_SETTINGS_DETAIL,
+      }))
+      return
+    }
     if (!canEnhancePrompt) return
     void runEnhance(prompt)
-  }, [canEnhancePrompt, prompt, runEnhance])
+  }, [enhanceBlockedByMissingGeminiKey, canEnhancePrompt, prompt, runEnhance])
 
   // Pure local navigation through promptHistory — no network call. "Redo" means redo the
   // undo you just did, not "enhance again" (a fresh rewrite is just Enhance after an Undo).
@@ -2635,6 +2904,7 @@ export function GenSpace() {
         settings: imageSettings,
         modelLabel,
         inputImageUrl: editSource,
+        inputLastImageUrl: null,
         inputAudioUrl: null,
       }
       await writeRecoveryContext({
@@ -2647,10 +2917,11 @@ export function GenSpace() {
       generateImage(prompt, imageSettings, editSource)
     } else {
       // Generate video (t2v if no image/audio, i2v if image, a2v if audio)
-      const imagePath = inputImage || null
-      const audioPath = inputAudio || null
+      const imagePath = mode === 'multi-keyframe' ? null : inputImage || null
+      const audioPath = genSpaceUsesAudioInput(mode) ? inputAudio || null : null
       const videoSettings = sanitizeVideoSettings(settings)
       if (!videoSettings) return
+      const lastImagePath = imagePath && videoSettings.duration != null ? inputLastImage : null
       const genSettings: GenerationSettings = {
           ...videoSettings,
           model: videoSettings.model as VideoGenerationPipeline,
@@ -2658,7 +2929,9 @@ export function GenSpace() {
           imageAspectRatio: videoSettings.aspectRatio ?? '16:9',
           imageSteps: 4,
           // Local LoRA refs are filesystem paths the cloud API can't resolve.
-          loras: canUseUserLoras && selectedLoras.length > 0 ? selectedLoras : undefined,
+          loras: mode !== 'multi-keyframe' && canUseUserLoras && selectedLoras.length > 0
+            ? selectedLoras
+            : undefined,
       }
       const modelLabel = resolvePipelineDisplayName(videoModelSpecs, genSettings.model) ?? undefined
       generateSubmissionRef.current = {
@@ -2667,16 +2940,20 @@ export function GenSpace() {
         settings: genSettings,
         modelLabel,
         inputImageUrl: imagePath,
+        inputLastImageUrl: lastImagePath,
         inputAudioUrl: audioPath,
+        keyframes: mode === 'multi-keyframe' ? keyframes : undefined,
       }
       await writeRecoveryContext({
         prompt,
         settings: genSettings,
         modelLabel,
         inputImageUrl: imagePath ?? undefined,
+        inputLastImageUrl: lastImagePath ?? undefined,
         inputAudioUrl: audioPath ?? undefined,
+        keyframes: mode === 'multi-keyframe' ? toPersistedKeyframes(keyframes) : undefined,
       })
-      generate(prompt, imagePath, genSettings, audioPath)
+      generate(prompt, imagePath, genSettings, audioPath, lastImagePath, { mode, keyframes })
     }
   }
   
@@ -2745,13 +3022,13 @@ export function GenSpace() {
   const isRetakeMode = mode === 'retake'
   const isExtendMode = mode === 'extend'
   const isIcLoraMode = mode === 'ic-lora'
-  const hasCompatibleVideoSettings = mode !== 'video' || (
+  const hasCompatibleVideoSettings = (mode !== 'video' && mode !== 'multi-keyframe') || (
     !isLoadingVideoGenerationModelSpecs
     && videoModelSpecs.length > 0
     && resolveVideoGenerationOptions({
       settings,
       modelSpecs: videoModelSpecs,
-      hasAudio: Boolean(inputAudio),
+      hasAudio: genSpaceUsesAudioInput(mode) && Boolean(inputAudio),
       minimumDuration: shouldVideoGenerateWithLtxApi ? GENSPACE_MIN_SELECTABLE_DURATION_S : undefined,
     }).hasCompatibleOptions
   )
@@ -2768,7 +3045,9 @@ export function GenSpace() {
       : isIcLoraMode
         ? (!!prompt.trim() || promptOptional) && icLoraInput.ready && !!icLoraInput.videoPath
           && (isCatalogIcLora || icLoraCondType !== 'custom' || !!icLoraCustomRef)
-        : !!prompt.trim() && hasCompatibleVideoSettings)
+        : !!prompt.trim()
+          && (mode !== 'multi-keyframe' || keyframes.length >= 1)
+          && hasCompatibleVideoSettings)
   const promptButtonLabel = isRetakeMode ? 'Retake' : isExtendMode ? 'Extend' : isIcLoraMode ? 'Generate' : 'Generate'
   const promptButtonIcon = isRetakeMode
     ? <Scissors className="h-3.5 w-3.5" />
@@ -2788,10 +3067,33 @@ export function GenSpace() {
   }, [cancel])
   const inFlightCanStop = globalCanCancel
     || generationCanCancel || retakeCanCancel || extendCanCancel || icLoraCanCancel
-  const isLibraryMode = mode === 'video' || mode === 'image'
+  const isLibraryMode = isGenSpaceLibraryMode(mode)
+  const generatingTileKind = mode === 'image' ? 'image' : 'video'
   const showGeneratingTile = isGenerating
-    && (mode === 'image' || mode === 'video')
-    && shouldShowGeneratingTile(typeFilter, mode)
+    && isLibraryMode
+    && shouldShowGeneratingTile(typeFilter, generatingTileKind)
+  const displayedPreviewKeyframe = previewKeyframeForPlayhead(
+    keyframes,
+    playheadFrame,
+    dragFrame,
+  ) ?? null
+
+  const handleDragFrameChange = useCallback((next: DraggedFrame | null) => {
+    setDragFrame((current) => (sameDraggedFrame(current, next) ? current : next))
+  }, [])
+
+  const applyDroppedKeyframePaths = useCallback((paths: string[]) => {
+    setKeyframes((current) => applyKeyframeImagePaths({
+      keyframes: current,
+      paths,
+      replaceId: null,
+      lastFrame: settings.duration == null
+        ? null
+        : lastFrameFromDuration(settings.duration, settings.fps),
+      preferredFrame: playheadFrame,
+      maxCount: multiKeyframeMaxCount,
+    }))
+  }, [settings.duration, settings.fps, playheadFrame, multiKeyframeMaxCount])
 
   // Navigation for the asset preview modal
   const selectedIndex = selectedAsset ? filteredAssets.findIndex(a => a.id === selectedAsset.id) : -1
@@ -2849,6 +3151,9 @@ export function GenSpace() {
 
   return (
     <div className="h-full relative bg-zinc-950">
+      <Group orientation="vertical" className="h-full w-full">
+        <Panel id="genspace-content-panel" minSize={20} className="min-h-0">
+          <div className="relative h-full min-h-0">
 
       {/* Empty state */}
       {isLibraryMode && assets.length === 0 && !isGenerating && (
@@ -2876,7 +3181,7 @@ export function GenSpace() {
       {/* Assets area — full width, no background, above the prompt bar */}
       {/* Kept mounted even with no assets so the Browse LoRAs / Favorites / size toolbar survives the empty state. */}
       {isLibraryMode && (
-        <div className="absolute inset-x-0 top-0 bottom-[160px] flex flex-col px-4 pt-4">
+        <div className="absolute inset-0 flex flex-col px-4 pt-4">
           <GenSpaceGalleryToolbar
             showBrowseLoras={mode === 'video' && canUseUserLoras}
             onBrowseLoras={() => loraLibrary.setModalOpen(true)}
@@ -2935,8 +3240,18 @@ export function GenSpace() {
         </div>
       )}
 
+      {mode === 'multi-keyframe' && (
+        <div className="absolute inset-0 px-4 pt-4 pb-4 flex flex-col overflow-hidden">
+          <KeyframePreview
+            keyframe={displayedPreviewKeyframe}
+            aspectRatio={settings.aspectRatio}
+            onDropImages={applyDroppedKeyframePaths}
+          />
+        </div>
+      )}
+
       {mode === 'retake' && (
-        <div className="absolute inset-x-0 top-0 bottom-[160px] px-4 pt-4 pb-4 flex flex-col overflow-hidden">
+        <div className="absolute inset-0 px-4 pt-4 pb-4 flex flex-col overflow-hidden">
           <RetakePanel
             initialVideoPath={retakeInitial.videoPath}
             initialDuration={retakeInitial.duration}
@@ -2951,7 +3266,7 @@ export function GenSpace() {
       )}
 
       {mode === 'extend' && (
-        <div className="absolute inset-x-0 top-0 bottom-[160px] px-4 pt-4 pb-4 flex flex-col overflow-hidden">
+        <div className="absolute inset-0 px-4 pt-4 pb-4 flex flex-col overflow-hidden">
           <ExtendPanel
             initialVideoPath={extendInitial.videoPath}
             initialDuration={extendInitial.duration}
@@ -2966,9 +3281,7 @@ export function GenSpace() {
       )}
 
       {mode === 'ic-lora' && !forceApiGenerations && (
-        // Extra bottom clearance (vs 160px elsewhere): the floating panel here also carries the
-        // selected-IC-LoRA info banner, so reserve room so it can't cover the panel's bottom bar.
-        <div className="absolute inset-x-0 top-0 bottom-[210px] px-4 pt-4 pb-4 flex flex-col overflow-hidden">
+        <div className="absolute inset-0 px-4 pt-4 pb-4 flex flex-col overflow-hidden">
           <ICLoraPanel
             initialVideoPath={icLoraInitial.videoPath}
             resetKey={icLoraPanelKey}
@@ -3009,107 +3322,142 @@ export function GenSpace() {
         </div>
       )}
 
-      {/* Floating prompt panel — wider, responsive, centered */}
-      <div className="absolute bottom-5 left-1/2 w-[min(860px,calc(100%-2rem))] -translate-x-1/2">
-
-        <FreeApiKeyBubble
-          forceApiGenerations={forceApiGenerations}
-          hasLtxApiKey={appSettings.hasLtxApiKey}
-          isGenerating={isGenerating}
-        />
-
-        {/* Active IC-LoRA (IC-LoRA view only). */}
-        {mode === 'ic-lora' && isCatalogIcLora && selectedIcLora && (
-          <SelectedLoraInfo items={[{
-            name: variantDisplayName(
-              selectedIcLora.name,
-              selectedIcLoraVariantId
-                ? selectedIcLora.download.variants?.find(v => v.id === selectedIcLoraVariantId)?.label
-                : undefined,
-              selectedIcLora.download.variants?.length,
-            ),
-            sections: selectedIcLora.instructions ?? undefined,
-            repoId: selectedIcLora.download.repo_id,
-            isCommunity: selectedIcLora.author?.affiliation !== 'ltx',
-          }]} />
-        )}
-
-        {/* Selected plain LoRAs (video gen only) — one chip each, info from the matched catalog entry. */}
-        {mode === 'video' && isLocalMode && selectedLoras.length > 0 && (
-          <SelectedLoraInfo items={selectedLoras.map(s => {
-            const entry = loraLibrary.items.find(e => e.installedPath === s.ref)
-            return {
-              name: s.name,
-              sections: entry?.instructions,
-              repoId: entry?.repoId,
-              isCommunity: entry?.author?.affiliation !== 'ltx',
-            }
-          })} />
-        )}
-
-        {/* Prompt bar */}
-        <PromptBar
-          mode={mode}
-          onModeChange={setMode}
-          canUseIcLora={canUseIcLora}
-          canUseRetake={canUseRetake}
-          canUseExtend={canUseExtend}
-          canUseUserLoras={canUseUserLoras}
-          prompt={prompt}
-          onPromptChange={setPrompt}
-          onGenerate={handleGenerate}
-          onStop={inFlightCanStop ? handleStop : undefined}
-          isGenerating={promptGenerating}
-          isCancelling={isStopping || globalIsCancelling}
-          canGenerate={canSubmit}
-          buttonLabel={promptButtonLabel}
-          buttonIcon={promptButtonIcon}
-          extendDirection={extendDirection}
-          onExtendDirectionChange={setExtendDirection}
-          extendSeconds={extendSeconds}
-          onExtendSecondsChange={setExtendSeconds}
-          resolutionOptions={mode === 'extend' ? extendResolutionOpts : mode === 'retake' ? retakeResolutionOpts : []}
-          selectedResolution={mode === 'extend' ? extendResolutionKey : retakeResolutionKey}
-          onResolutionChange={mode === 'extend' ? setExtendResolutionKey : setRetakeResolutionKey}
-          retakeExtendModel={mode === 'extend' ? extendModel : retakeModel}
-          onRetakeExtendModelChange={mode === 'extend' ? setExtendModel : setRetakeModel}
-          inputImage={inputImage}
-          onInputImageChange={setInputImage}
-          inputAudio={inputAudio}
-          onInputAudioChange={setInputAudio}
-          settings={settings}
-          onSettingsChange={(nextSettings) => setSettings(sanitizeVideoSettings(nextSettings))}
-          videoModelSpecs={videoModelSpecs}
-          videoSettingsMessage={videoSettingsMessage}
-          icLoraControls={icLoraControlsProps}
-          promptOptional={promptOptional}
-          isLocalMode={isLocalMode}
-          imageUsesFalApi={shouldImageGenerateWithFalApi}
-          availableLoras={localLoras}
-          selectedLoras={selectedLoras}
-          onSelectedLorasChange={setSelectedLoras}
-          loraDisplayNames={loraDisplayNames}
-          loraCatalogIdsByPath={loraCatalogIdsByPath}
-          enhanceProviderAvailable={isEnhancerProviderAvailable}
-          enhanceAvailableForMode={enhanceAvailableForMode}
-          canEnhancePrompt={canEnhancePrompt}
-          enhanceProvider={enhanceProvider}
-          onEnhanceProviderChange={canToggleEnhanceProvider ? setEnhanceProviderPref : undefined}
-          isEnhancingPrompt={isEnhancingPrompt}
-          enhancePromptError={enhancePromptError}
-          onEnhancePrompt={handleEnhancePrompt}
-          canUndoPrompt={canUndoPrompt}
-          onUndoPrompt={handleUndoPrompt}
-          canRedoPrompt={canRedoPrompt}
-          onRedoPrompt={handleRedoPrompt}
-        />
-
-        {/* Advanced IC-LoRA controls — bottom-aligned to the right of the prompt panel. */}
-        {mode === 'ic-lora' && canUseIcLora && advancedIcLoraControls && (
-          <div className="absolute left-full bottom-0 ml-3">
-            <IcLoraAdvancedPanel {...icLoraControlsProps} />
           </div>
-        )}
+        </Panel>
+        <Separator
+          className="h-1 flex-shrink-0 cursor-row-resize bg-transparent hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors relative z-10"
+          title="Drag to resize prompt bar. Double-click to reset."
+          onDoubleClick={resetPromptBarHeight}
+        />
+        <Panel
+          id="genspace-prompt-bar-panel"
+          panelRef={promptBarPanelRef}
+          defaultSize={promptBarInitialHeight}
+          minSize={promptBarHeightLimits.min}
+          maxSize={promptBarHeightLimits.max}
+          groupResizeBehavior="preserve-pixel-size"
+          onResize={(size, _id, prev) => {
+            if (!prev) return
+            persistPromptBarHeight(size.inPixels)
+          }}
+          className="min-h-0"
+        >
+          <div className="relative h-full min-h-0 px-4 pb-5">
+            <div className="relative mx-auto h-full w-[min(860px,100%)]">
+              <PromptBar
+                mode={mode}
+                onModeChange={setMode}
+                canUseMultiKeyframe={canUseMultiKeyframe}
+                canUseIcLora={canUseIcLora}
+                canUseRetake={canUseRetake}
+                canUseExtend={canUseExtend}
+                canUseUserLoras={canUseUserLoras}
+                prompt={prompt}
+                onPromptChange={setPrompt}
+                onGenerate={handleGenerate}
+                onStop={inFlightCanStop ? handleStop : undefined}
+                isGenerating={promptGenerating}
+                isCancelling={isStopping || globalIsCancelling}
+                canGenerate={canSubmit}
+                buttonLabel={promptButtonLabel}
+                buttonIcon={promptButtonIcon}
+                extendDirection={extendDirection}
+                onExtendDirectionChange={setExtendDirection}
+                extendSeconds={extendSeconds}
+                onExtendSecondsChange={setExtendSeconds}
+                resolutionOptions={mode === 'extend' ? extendResolutionOpts : mode === 'retake' ? retakeResolutionOpts : []}
+                selectedResolution={mode === 'extend' ? extendResolutionKey : retakeResolutionKey}
+                onResolutionChange={mode === 'extend' ? setExtendResolutionKey : setRetakeResolutionKey}
+                retakeExtendModel={mode === 'extend' ? extendModel : retakeModel}
+                onRetakeExtendModelChange={mode === 'extend' ? setExtendModel : setRetakeModel}
+                inputImage={inputImage}
+                onInputImageChange={setInputImage}
+                inputLastImage={inputLastImage}
+                onInputLastImageChange={setInputLastImage}
+                inputAudio={inputAudio}
+                onInputAudioChange={setInputAudio}
+                keyframes={keyframes}
+                onKeyframesChange={setKeyframes}
+                multiKeyframeMaxCount={multiKeyframeMaxCount}
+                playheadFrame={playheadFrame}
+                onPlayheadChange={setPlayheadFrame}
+                onDragFrameChange={handleDragFrameChange}
+                settings={settings}
+                onSettingsChange={(nextSettings) => setSettings(sanitizeVideoSettings(nextSettings))}
+                videoModelSpecs={videoModelSpecs}
+                videoSettingsMessage={videoSettingsMessage}
+                icLoraControls={icLoraControlsProps}
+                promptOptional={promptOptional}
+                isLocalMode={isLocalMode}
+                imageUsesFalApi={shouldImageGenerateWithFalApi}
+                availableLoras={localLoras}
+                selectedLoras={selectedLoras}
+                onSelectedLorasChange={setSelectedLoras}
+                loraDisplayNames={loraDisplayNames}
+                loraCatalogIdsByPath={loraCatalogIdsByPath}
+                enhanceAvailableForMode={enhanceAvailableForMode}
+                canEnhancePrompt={canEnhancePrompt}
+                enhanceBlockedByMissingGeminiKey={enhanceBlockedByMissingGeminiKey}
+                enhanceProvider={enhanceProvider}
+                onEnhanceProviderChange={canToggleEnhanceProvider ? handleEnhanceProviderChange : undefined}
+                isEnhancingPrompt={isEnhancingPrompt}
+                enhancePromptError={enhancePromptError}
+                onEnhancePrompt={handleEnhancePrompt}
+                canUndoPrompt={canUndoPrompt}
+                onUndoPrompt={handleUndoPrompt}
+                canRedoPrompt={canRedoPrompt}
+                onRedoPrompt={handleRedoPrompt}
+              />
+
+              {mode === 'ic-lora' && canUseIcLora && advancedIcLoraControls && (
+                <div className="absolute left-full bottom-0 ml-3">
+                  <IcLoraAdvancedPanel {...icLoraControlsProps} />
+                </div>
+              )}
+            </div>
+          </div>
+        </Panel>
+      </Group>
+
+      {/* LoRA chips / API bubble overlay the gallery so they never steal prompt-bar height. */}
+      <div
+        className="pointer-events-none absolute left-1/2 z-20 w-[min(860px,calc(100%-2rem))] -translate-x-1/2"
+        style={{ bottom: promptBarHeight + 4 }}
+      >
+        <div className="pointer-events-auto">
+          <FreeApiKeyBubble
+            forceApiGenerations={forceApiGenerations}
+            hasLtxApiKey={appSettings.hasLtxApiKey}
+            isGenerating={isGenerating}
+          />
+
+          {mode === 'ic-lora' && isCatalogIcLora && selectedIcLora && (
+            <SelectedLoraInfo items={[{
+              name: variantDisplayName(
+                selectedIcLora.name,
+                selectedIcLoraVariantId
+                  ? selectedIcLora.download.variants?.find(v => v.id === selectedIcLoraVariantId)?.label
+                  : undefined,
+                selectedIcLora.download.variants?.length,
+              ),
+              sections: selectedIcLora.instructions ?? undefined,
+              repoId: selectedIcLora.download.repo_id,
+              isCommunity: selectedIcLora.author?.affiliation !== 'ltx',
+            }]} />
+          )}
+
+          {mode === 'video' && isLocalMode && selectedLoras.length > 0 && (
+            <SelectedLoraInfo items={selectedLoras.map(s => {
+              const entry = loraLibrary.items.find(e => e.installedPath === s.ref)
+              return {
+                name: s.name,
+                sections: entry?.instructions,
+                repoId: entry?.repoId,
+                isCommunity: entry?.author?.affiliation !== 'ltx',
+              }
+            })} />
+          )}
+        </div>
       </div>
 
       <LoraLibraryModal

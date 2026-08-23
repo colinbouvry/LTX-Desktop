@@ -11,7 +11,7 @@ import pytest
 
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateVideoRequest
-from frame_math import AutoDurationSpec
+from frame_math import AutoDurationSpec, compute_num_frames
 from runtime_config.model_download_specs import delete_cp_path, get_ltx_model_spec, resolve_model_path
 from services import generation_interrupt
 from services.generation_interrupt import GenerationCancelledError
@@ -332,6 +332,185 @@ class TestGenerate:
         )
         assert "Invalid image file" in data["message"]
 
+    def test_last_frame_without_first_rejected(self, client):
+        r = client.post(
+            "/api/generate",
+            json={**_T2V_JSON, "lastImagePath": "/tmp/last.png"},
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Last frame requires a first-frame image",
+        )
+
+    def test_last_frame_with_whitespace_first_rejected(self, client):
+        r = client.post(
+            "/api/generate",
+            json={**_T2V_JSON, "imagePath": "  ", "lastImagePath": "/tmp/last.png"},
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Last frame requires a first-frame image",
+        )
+
+    def test_last_frame_with_auto_duration_rejected(self, client):
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "duration": None,
+                "imagePath": "/tmp/first.png",
+                "lastImagePath": "/tmp/last.png",
+            },
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Last frame cannot be combined with automatic duration",
+        )
+
+    def test_i2v_last_frame_sends_two_conditionings(
+        self, client, test_state, fake_services, create_fake_model_files, make_test_image, tmp_path
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        first = tmp_path / "first.png"
+        last = tmp_path / "last.png"
+        first.write_bytes(make_test_image().getvalue())
+        last.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={**_T2V_JSON, "imagePath": str(first), "lastImagePath": str(last)},
+        )
+
+        assert r.status_code == 200
+        images = fake_services.fast_video_pipeline.generate_calls[0]["images"]
+        assert len(images) == 2
+        assert images[0].frame_idx == 0
+        assert images[0].strength == 1.0
+        assert images[1].frame_idx == compute_num_frames(5, 24) - 1
+        assert images[1].strength == 1.0
+        assert images[0].path != images[1].path
+
+    def test_keyframes_cannot_mix_with_first_frame(self, client):
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "imagePath": "/tmp/first.png",
+                "keyframes": [{"imagePath": "/tmp/opening.png", "frameIndex": 0}],
+            },
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Keyframes cannot be combined with a first or last frame",
+        )
+
+    def test_keyframes_cannot_mix_with_audio(self, client):
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "audioPath": "/tmp/audio.wav",
+                "keyframes": [{"imagePath": "/tmp/opening.png", "frameIndex": 0}],
+            },
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Keyframes cannot be combined with audio-to-video",
+        )
+
+    def test_keyframes_cannot_use_auto_duration(self, client):
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "duration": None,
+                "keyframes": [{"imagePath": "/tmp/opening.png", "frameIndex": 0}],
+            },
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Keyframes cannot be combined with automatic duration",
+        )
+
+    def test_keyframes_rejected_on_api_backend(self, client, test_state):
+        test_state.config.local_generations_mode = "unsupported"
+        test_state.state.app_settings.ltx_api_key = "api-key"
+
+        r = client.post(
+            "/api/generate",
+            json={
+                "prompt": "test",
+                "resolution": "1080p",
+                "model": "fast",
+                "duration": 5,
+                "fps": 24,
+                "keyframes": [{"imagePath": "/tmp/opening.png", "frameIndex": 0}],
+            },
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="Multi-keyframe generation is only available for local generation",
+        )
+
+    def test_keyframes_cap_is_enforced(self, client):
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "keyframes": [
+                    {"imagePath": f"/tmp/kf-{index}.png", "frameIndex": index}
+                    for index in range(6)
+                ],
+            },
+        )
+        assert_http_error(
+            r,
+            status_code=422,
+            code="INVALID_VIDEO_GENERATION_SPEC",
+            message="You can place up to 5 keyframes",
+        )
+
+    def test_keyframes_send_conditionings_at_requested_frames(
+        self, client, test_state, fake_services, create_fake_model_files, make_test_image, tmp_path
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        opening = tmp_path / "opening.png"
+        closing = tmp_path / "closing.png"
+        opening.write_bytes(make_test_image().getvalue())
+        closing.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "keyframes": [
+                    {"imagePath": str(opening), "frameIndex": 0, "strength": 1.0},
+                    {"imagePath": str(closing), "frameIndex": 80, "strength": 1.0},
+                ],
+            },
+        )
+
+        assert r.status_code == 200
+        images = fake_services.fast_video_pipeline.generate_calls[0]["images"]
+        assert [(image.frame_idx, image.strength) for image in images] == [(0, 1.0), (80, 1.0)]
+        assert images[0].path != images[1].path
+
     def test_resolution_mapping_540p_on_2_5(self, client, test_state, fake_services, create_fake_model_files):
         # 2.5 540p is legal 16:9 on the /64 two-stage grid (1024×576).
         create_fake_model_files()
@@ -503,6 +682,34 @@ class TestA2VGenerate:
 
         assert r.status_code == 200
         assert fake_services.a2v_pipeline.create_loras[-1] == [(lora_ref, 0.7)]
+
+    def test_a2v_last_frame_sends_two_conditionings(
+        self, client, test_state, fake_services, create_fake_model_files, make_test_image, tmp_path
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        audio_file = tmp_path / "test_audio.wav"
+        _write_test_wav(audio_file)
+        first = tmp_path / "first.png"
+        last = tmp_path / "last.png"
+        first.write_bytes(make_test_image().getvalue())
+        last.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "audioPath": str(audio_file),
+                "imagePath": str(first),
+                "lastImagePath": str(last),
+            },
+        )
+
+        assert r.status_code == 200
+        images = fake_services.a2v_pipeline.generate_calls[0]["images"]
+        assert len(images) == 2
+        assert images[0].frame_idx == 0
+        assert images[1].frame_idx == compute_num_frames(5, 24) - 1
 
     def test_a2v_rejects_missing_audio_file(self, client, test_state, create_fake_model_files):
         create_fake_model_files()
@@ -705,6 +912,43 @@ class TestA2VGenerate:
         assert call["image_uri"] == "storage://uploaded/input.png"
         assert call["model"] == "ltx-2-3-pro"
         assert call["resolution"] == "1920x1080"
+
+    def test_a2v_forced_api_sends_last_frame_uri(
+        self, client, test_state, fake_services, make_test_image, tmp_path
+    ):
+        test_state.config.local_generations_mode = "unsupported"
+        test_state.state.app_settings.ltx_api_key = "api-key"
+        audio_file = tmp_path / "test_audio.wav"
+        _write_test_wav(audio_file)
+        first = tmp_path / "first.png"
+        last = tmp_path / "last.png"
+        first.write_bytes(make_test_image().getvalue())
+        last.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={
+                "prompt": "A music video with start and end frames",
+                "resolution": "1080p",
+                "model": "pro",
+                "duration": 6,
+                "fps": 50,
+                "audioPath": str(audio_file),
+                "imagePath": str(first),
+                "lastImagePath": str(last),
+            },
+        )
+
+        assert r.status_code == 200
+        assert [c["file_path"] for c in fake_services.ltx_api_client.upload_file_calls] == [
+            str(audio_file),
+            str(first),
+            str(last),
+        ]
+        call = fake_services.ltx_api_client.audio_to_video_calls[0]
+        assert call["audio_uri"] == "storage://uploaded/test_audio.wav"
+        assert call["image_uri"] == "storage://uploaded/first.png"
+        assert call["last_frame_uri"] == "storage://uploaded/last.png"
 
     def test_a2v_uses_resolution_map_on_2_5(self, client, test_state, fake_services, create_fake_model_files, tmp_path):
         create_fake_model_files()
@@ -1159,6 +1403,38 @@ class TestForcedApiGenerate:
         assert call["resolution"] == "1920x1080"
         assert call["duration"] == 6.0
         assert call["fps"] == 25.0
+
+    def test_i2v_sends_last_frame_uri(self, client, test_state, fake_services, make_test_image, tmp_path):
+        test_state.config.local_generations_mode = "unsupported"
+        test_state.state.app_settings.ltx_api_key = "api-key"
+        first = tmp_path / "first.png"
+        last = tmp_path / "last.png"
+        first.write_bytes(make_test_image().getvalue())
+        last.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={
+                "prompt": "Animate from first to last",
+                "resolution": "1080p",
+                "model": "fast",
+                "duration": 6,
+                "fps": 25,
+                "audio": False,
+                "imagePath": str(first),
+                "lastImagePath": str(last),
+            },
+        )
+
+        assert r.status_code == 200
+        assert [c["file_path"] for c in fake_services.ltx_api_client.upload_file_calls] == [
+            str(first),
+            str(last),
+        ]
+        call = fake_services.ltx_api_client.image_to_video_calls[0]
+        assert call["image_uri"] == "storage://uploaded/first.png"
+        assert call["last_frame_uri"] == "storage://uploaded/last.png"
+        assert call["model"] == "ltx-2-3-fast"
 
     def test_invalid_forced_model_rejected(self, client, test_state):
         test_state.config.local_generations_mode = "unsupported"
@@ -1960,16 +2236,21 @@ class TestGenerateModelSpecs:
         assert local_caps["a2v"] is True
         assert local_caps["ic_lora"] is True
         assert local_caps["user_loras"] is True
-        assert local_caps["retake"] is True
-        assert local_caps["extend"] is True
+        assert local_caps["retake"] is False
+        assert local_caps["extend"] is False
+        assert local_caps["multi_keyframe"] is True
         # No DurationHead on disk in this fixture — Auto stays off until that file is present.
         assert local_caps["auto_duration"] is False
         assert api_models_by_pipeline["fast"]["spec"]["capabilities"]["a2v"] is False
+        assert api_models_by_pipeline["fast"]["spec"]["capabilities"]["multi_keyframe"] is False
         assert api_models_by_pipeline["fast"]["spec"]["capabilities"]["auto_duration"] is False
         assert api_models_by_pipeline["fast-2.5"]["spec"]["capabilities"]["a2v"] is True
+        assert api_models_by_pipeline["fast-2.5"]["spec"]["capabilities"]["multi_keyframe"] is False
         assert api_models_by_pipeline["fast-2.5"]["spec"]["capabilities"]["auto_duration"] is True
         assert api_models_by_pipeline["pro"]["spec"]["capabilities"]["retake"] is True
+        assert api_models_by_pipeline["pro"]["spec"]["capabilities"]["multi_keyframe"] is False
         assert api_models_by_pipeline["pro-2.5"]["spec"]["capabilities"]["retake"] is False
+        assert api_models_by_pipeline["pro-2.5"]["spec"]["capabilities"]["multi_keyframe"] is False
         assert api_models_by_pipeline["pro-2.5"]["spec"]["capabilities"]["auto_duration"] is True
 
     def test_local_auto_duration_requires_duration_head_on_disk(self, client, create_fake_model_files):
@@ -2415,6 +2696,60 @@ class TestLocalEncodingEnhancement:
         assert r.status_code == 200
 
         assert len(fake_services.prompt_enhancer_pipeline.enhance_i2v_calls) == 1
+        assert fake_services.prompt_enhancer_pipeline.enhance_t2v_calls == []
+        assert fake_services.prompt_enhancer_pipeline.enhance_i2v_calls[0]["last_image_path"] is None
+
+    def test_i2v_last_frame_is_passed_to_the_enhancer(
+        self, client, test_state, fake_services, create_fake_model_files, make_test_image, tmp_path
+    ):
+        self._setup_local(test_state, create_fake_model_files, with_enhancer=True)
+        first = tmp_path / "first.png"
+        last = tmp_path / "last.png"
+        first.write_bytes(make_test_image().getvalue())
+        last.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={**_T2V_JSON, "imagePath": str(first), "lastImagePath": str(last)},
+        )
+        assert r.status_code == 200
+        call = fake_services.prompt_enhancer_pipeline.enhance_i2v_calls[0]
+        assert call["image_path"] == str(first)
+        assert call["last_image_path"] == str(last)
+
+    def test_keyframes_are_all_passed_to_the_enhancer(
+        self, client, test_state, fake_services, create_fake_model_files, make_test_image, tmp_path
+    ):
+        self._setup_local(test_state, create_fake_model_files, with_enhancer=True)
+        opening = tmp_path / "opening.png"
+        middle = tmp_path / "middle.png"
+        closing = tmp_path / "closing.png"
+        for path in (opening, middle, closing):
+            path.write_bytes(make_test_image().getvalue())
+
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "keyframes": [
+                    {"imagePath": str(closing), "frameIndex": 80},
+                    {"imagePath": str(opening), "frameIndex": 0},
+                    {"imagePath": str(middle), "frameIndex": 40},
+                ],
+            },
+        )
+        assert r.status_code == 200
+        call = fake_services.prompt_enhancer_pipeline.enhance_i2v_calls[0]
+        assert call["keyframes"] == [
+            (str(opening), 0, 1.0),
+            (str(middle), 40, 1.0),
+            (str(closing), 80, 1.0),
+        ]
+        assert call["duration"] == 5
+        assert call["fps"] == 24
+        assert call["last_image_path"] is None
+        assert call["system_prompt"] is not None
+        assert "visual ground truth" in call["system_prompt"]
         assert fake_services.prompt_enhancer_pipeline.enhance_t2v_calls == []
 
     def test_api_encoding_still_enhances_server_side(

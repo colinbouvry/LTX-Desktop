@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
@@ -17,6 +18,8 @@ from services.services_utils import (
     clamp_strength,
     get_device_type,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -46,9 +49,8 @@ class ZitImageGenerationPipeline:
     def _resolve_generator_device(self) -> str:
         # The configured runtime device is authoritative. With enable_model_cpu_offload()
         # the pipeline's _execution_device can read as "cpu", but the generator must live
-        # on the actual compute device. This previously returned "cuda" whenever offload
-        # was active — but offload is enabled on MPS too, so on a Mac it built a CUDA
-        # generator and failed ("Cannot get CUDA generator without ATen_cuda library").
+        # on the actual compute device. Offload is CUDA-only; if we ever lose `_device`
+        # while offload is active, CUDA is the only remaining compute device.
         if self._device is not None:
             return self._device
         if self._cpu_offload_active:
@@ -56,6 +58,16 @@ class ZitImageGenerationPipeline:
 
         execution_device = getattr(self.pipeline, "_execution_device", None)
         return get_device_type(execution_device)
+
+    def _log_run(self, kind: str, *, width: int | None = None, height: int | None = None) -> None:
+        size = f"{width}x{height} " if width is not None and height is not None else ""
+        logger.info(
+            "ZIT %s %sdevice=%s offload=%s",
+            kind,
+            size,
+            self._device,
+            self._cpu_offload_active,
+        )
 
     @staticmethod
     def _normalize_output(output: object) -> ImagePipelineOutputLike:
@@ -84,6 +96,7 @@ class ZitImageGenerationPipeline:
     ) -> ImagePipelineOutputLike:
         # ZImagePipeline ignores guidance_scale, so we drop it explicitly.
         _ = guidance_scale
+        self._log_run("generate", width=width, height=height)
         generator = torch.Generator(device=self._resolve_generator_device()).manual_seed(seed)
         pipeline = cast(Any, self.pipeline)
         output = pipeline(
@@ -121,6 +134,7 @@ class ZitImageGenerationPipeline:
         seed: int,
     ) -> ImagePipelineOutputLike:
         img2img = self._ensure_img2img_pipeline()
+        self._log_run("edit")
 
         generator = torch.Generator(device=self._resolve_generator_device()).manual_seed(seed)
         output = img2img(
@@ -138,10 +152,14 @@ class ZitImageGenerationPipeline:
 
     def to(self, device: str) -> None:
         runtime_device = get_device_type(device)
-        if runtime_device in ("cuda", "mps"):
+        if runtime_device == "cuda":
             self.pipeline.enable_model_cpu_offload()  # type: ignore[reportUnknownMemberType]
             self._cpu_offload_active = True
         else:
+            # MPS is unified memory: cpu-offload keeps a host copy *and* a GPU copy of
+            # the active module in the same RAM pool, which raised peak and jetsam'd Macs
+            # during Z-Image step 0. Resident placement matches how the weights already
+            # sit in RAM. CUDA still offloads (discrete VRAM ≠ host RAM).
             self._cpu_offload_active = False
             self.pipeline.to(runtime_device)  # type: ignore[reportUnknownMemberType]
         self._device = runtime_device

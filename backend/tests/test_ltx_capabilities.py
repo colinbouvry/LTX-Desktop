@@ -52,8 +52,10 @@ def test_local_2_5_allows_ic_lora_and_user_loras():
     caps = local_caps("ltx-2.5-22b-distilled")
     assert supports(caps, "ic_lora") is True
     assert supports(caps, "user_loras") is True
-    assert supports(caps, "retake") is True
-    assert supports(caps, "extend") is True
+    assert supports(caps, "retake") is False
+    assert supports(caps, "extend") is False
+    assert supports(caps, "multi_keyframe") is True
+    assert caps.multi_keyframe_max_count == 5
 
 
 def test_local_2_3_allows_ic_lora_user_loras_retake():
@@ -62,6 +64,8 @@ def test_local_2_3_allows_ic_lora_user_loras_retake():
     assert supports(caps, "user_loras") is True
     assert supports(caps, "retake") is True
     assert supports(caps, "extend") is True
+    assert supports(caps, "multi_keyframe") is True
+    assert caps.multi_keyframe_max_count == 5
     assert supports(caps, "auto_duration") is False
 
 
@@ -142,3 +146,10 @@ def test_ic_lora_flag_is_on_for_every_local_model():
 
     for model_id in ALL_LTX_LOCAL_MODEL_IDS:
         assert supports(local_caps(model_id), "ic_lora") is True
+
+
+@pytest.mark.parametrize("pipeline", ["fast", "fast-2.5", "pro", "pro-2.5"])
+def test_multi_keyframe_is_off_for_every_api_pipeline(pipeline):
+    caps = api_caps(pipeline)
+    assert supports(caps, "multi_keyframe") is False
+    assert caps.multi_keyframe_max_count == 0

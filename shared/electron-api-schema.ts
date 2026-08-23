@@ -176,6 +176,10 @@ export const electronAPISchemas = {
     input: z.object({}),
     output: z.string(),
   },
+  getFreeDiskSpace: {
+    input: z.object({ path: z.string() }),
+    output: ipcResult({ bytes: z.number() }),
+  },
 
   // Project assets
   addVisualAssetToProject: {

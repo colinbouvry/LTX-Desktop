@@ -15,8 +15,10 @@ from api_types import (
     LTXVideoGenPipeline,
     LTXVideoGenResolution,
 )
+from keyframe_request import validate_keyframe_inputs
 from runtime_config.ltx_capabilities import LtxOfferingCapabilities, api_caps, effective_local_caps
 from runtime_config.model_download_specs import get_latest_ltx_model_id, get_ltx_model_spec
+from server_utils.media_validation import normalize_optional_path
 
 # The concrete ltxv-api model id each Desktop-facing pipeline maps to when forced onto
 # the API backend. SSOT for this mapping — video_generation_handler and the
@@ -144,6 +146,8 @@ def _capabilities_spec(caps: LtxOfferingCapabilities) -> LTXOfferingCapabilities
         ic_lora=caps.ic_lora,
         retake=caps.retake,
         extend=caps.extend,
+        multi_keyframe=caps.multi_keyframe,
+        multi_keyframe_max_count=caps.multi_keyframe_max_count,
         user_loras=caps.user_loras,
         camera_motion=caps.camera_motion,
         auto_duration=caps.auto_duration,
@@ -261,7 +265,30 @@ def validate_generate_video_request(
     )
     item = next((candidate for candidate in items if candidate.pipeline == req.model), None)
     generation_backend = "api" if use_api_specs else "local"
-    generation_mode = "audio-to-video" if req.audioPath is not None else "image-to-video" if req.imagePath is not None else "text-to-video"
+    image_path = normalize_optional_path(req.imagePath)
+    last_image_path = normalize_optional_path(req.lastImagePath)
+    audio_path = normalize_optional_path(req.audioPath)
+    generation_mode = (
+        "audio-to-video" if audio_path is not None
+        else "image-to-video" if image_path is not None or req.keyframes
+        else "text-to-video"
+    )
+
+    keyframe_error = validate_keyframe_inputs(
+        req,
+        use_api_specs=use_api_specs,
+        image_path=image_path,
+        last_image_path=last_image_path,
+        audio_path=audio_path,
+    )
+    if keyframe_error is not None:
+        return keyframe_error
+
+    if last_image_path:
+        if not image_path:
+            return "Last frame requires a first-frame image"
+        if req.duration is None:
+            return "Last frame cannot be combined with automatic duration"
 
     if item is None:
         return (
@@ -269,7 +296,7 @@ def validate_generate_video_request(
             f"Supported pipelines: {', '.join(candidate.pipeline for candidate in items)}"
         )
 
-    resolution_spec = _get_resolution_spec(item, resolution=req.resolution, is_a2v=req.audioPath is not None)
+    resolution_spec = _get_resolution_spec(item, resolution=req.resolution, is_a2v=audio_path is not None)
     if resolution_spec is None:
         return (
             f"Unsupported {generation_backend} {generation_mode} resolution '{req.resolution}' "
@@ -283,7 +310,7 @@ def validate_generate_video_request(
         )
 
     if req.duration is None:
-        if req.audioPath is not None:
+        if audio_path is not None:
             return "Automatic duration cannot be combined with audio-to-video"
         if item.spec.capabilities is None or not item.spec.capabilities.auto_duration:
             return (
@@ -298,5 +325,15 @@ def validate_generate_video_request(
             f"Unsupported {generation_backend} {generation_mode} duration '{req.duration}' "
             f"for pipeline '{req.model}' at resolution '{req.resolution}' and fps '{req.fps}'"
         )
+
+    if req.keyframes:
+        caps = item.spec.capabilities
+        if caps is None or not caps.multi_keyframe:
+            return (
+                f"Multi-keyframe is not supported for {generation_backend} "
+                f"pipeline '{req.model}'"
+            )
+        if len(req.keyframes) > caps.multi_keyframe_max_count:
+            return f"You can place up to {caps.multi_keyframe_max_count} keyframes"
 
     return None

@@ -443,8 +443,8 @@ export async function startPythonBackend(): Promise<void> {
       }
     })
 
-    pythonProcess.on('exit', async (code) => {
-      logger.info(`Python backend exited with code ${code}`)
+    pythonProcess.on('exit', async (code, signal) => {
+      logger.info(`Python backend exited with code ${code} signal ${signal}`)
       stopLivenessMonitor()
       pythonProcess = null
       backendUrl = null

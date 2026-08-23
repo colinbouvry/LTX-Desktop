@@ -11,6 +11,7 @@ import {
   skipUpdateVersion, setAutoCheckUpdatesEnabled,
 } from '../updater'
 import { getAutoCheckUpdates } from '../app-state'
+import { freeDiskBytes } from '../free-disk-space'
 import { handle } from './typed-handle'
 
 function getModelsPath(): string {
@@ -96,6 +97,15 @@ export function registerAppHandlers(): void {
 
   handle('getDownloadsPath', () => {
     return app.getPath('downloads')
+  })
+
+  handle('getFreeDiskSpace', async ({ path: targetPath }) => {
+    try {
+      const bytes = await freeDiskBytes(targetPath)
+      return { success: true, bytes }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
   })
 
   handle('checkFirstRun', () => {

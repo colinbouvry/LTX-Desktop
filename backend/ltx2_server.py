@@ -45,6 +45,12 @@ import torch
 import mps_prebuilt_ext as _mps_prebuilt_ext  # pyright: ignore[reportUnusedImport]
 _mps_prebuilt_ext.setup_prebuilt_mps_extension()
 
+# LLM: bumping ltx-core / ltx-pipelines (backend/pyproject.toml) MUST re-verify every
+# import below (and mps_sdpa_torch later in this file). These monkey-patch private
+# ltx-core / ltx-pipelines / safetensors symbols. For each module: confirm the
+# upstream symbol still exists, the replacement still matches the contract, drop it
+# if upstream now includes the fix (see that file's "Remove once ..." docstring),
+# and run tests/test_<patch>.py.
 import services.patches.record_stream_fix as _record_stream_fix  # pyright: ignore[reportUnusedImport]  # Remove once ltx-core includes the fix
 del _record_stream_fix
 import services.patches.safetensors_loader_fix as _safetensors_loader_fix  # pyright: ignore[reportUnusedImport]  # Remove once safetensors/PyTorch fix the mmap issue
@@ -159,6 +165,12 @@ if use_sage_attention:
     except Exception:
         logger.warning("Failed to enable SageAttention", exc_info=True)
         use_sage_attention = False
+
+# Darwin: Diffusers/Z-Image call F.sdpa (stock MPS SDPA materializes S×S and can
+# freeze the machine). Video already uses mps-sdpa via ltx-core; this covers Z-Image.
+# Remove once Diffusers native attention on MPS uses a fused / mps-sdpa backend.
+import services.patches.mps_sdpa_torch as _mps_sdpa_torch
+_mps_sdpa_torch.install()
 
 # ============================================================
 # Constants & Paths

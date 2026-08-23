@@ -749,6 +749,30 @@
             ],
             "title": "Conditioningtype"
           },
+          "duration": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
           "icLoraId": {
             "anyOf": [
               {
@@ -771,6 +795,24 @@
             ],
             "title": "Imagepath"
           },
+          "keyframes": {
+            "items": {
+              "$ref": "#/components/schemas/KeyframeInput"
+            },
+            "title": "Keyframes",
+            "type": "array"
+          },
+          "lastImagePath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastimagepath"
+          },
           "loraCatalogIds": {
             "items": {
               "type": "string"
@@ -788,7 +830,6 @@
             "type": "string"
           },
           "prompt": {
-            "minLength": 1,
             "title": "Prompt",
             "type": "string"
           },
@@ -1153,6 +1194,24 @@
               }
             ],
             "title": "Imagepath"
+          },
+          "keyframes": {
+            "items": {
+              "$ref": "#/components/schemas/KeyframeInput"
+            },
+            "title": "Keyframes",
+            "type": "array"
+          },
+          "lastImagePath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastimagepath"
           },
           "loras": {
             "items": {
@@ -2475,6 +2534,33 @@
         "type": "object"
       },
       "JsonValue": {},
+      "KeyframeInput": {
+        "description": "CamelCase of LTXV keyframe-edit `{image_uri, frame_index, strength}`.",
+        "properties": {
+          "frameIndex": {
+            "minimum": 0.0,
+            "title": "Frameindex",
+            "type": "integer"
+          },
+          "imagePath": {
+            "title": "Imagepath",
+            "type": "string"
+          },
+          "strength": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Strength",
+            "type": "number"
+          }
+        },
+        "required": [
+          "imagePath",
+          "frameIndex"
+        ],
+        "title": "KeyframeInput",
+        "type": "object"
+      },
       "LTXOfferingCapabilitiesSpec": {
         "description": "Feature flags for one local model or API pipeline. Pixel maps stay backend-only.",
         "properties": {
@@ -2502,6 +2588,14 @@
             "title": "Ic Lora",
             "type": "boolean"
           },
+          "multi_keyframe": {
+            "title": "Multi Keyframe",
+            "type": "boolean"
+          },
+          "multi_keyframe_max_count": {
+            "title": "Multi Keyframe Max Count",
+            "type": "integer"
+          },
           "retake": {
             "title": "Retake",
             "type": "boolean"
@@ -2522,6 +2616,8 @@
           "ic_lora",
           "retake",
           "extend",
+          "multi_keyframe",
+          "multi_keyframe_max_count",
           "user_loras",
           "camera_motion",
           "auto_duration"

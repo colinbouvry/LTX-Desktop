@@ -26,7 +26,7 @@ export interface AppSettings {
   useConvVae: boolean
 }
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite'
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite'
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   useTorchCompile: false,

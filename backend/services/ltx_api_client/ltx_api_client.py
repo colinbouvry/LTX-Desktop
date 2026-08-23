@@ -69,6 +69,7 @@ class LTXAPIClient(Protocol):
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        last_frame_uri: str | None = None,
     ) -> bytes:
         ...
 
@@ -81,6 +82,7 @@ class LTXAPIClient(Protocol):
         image_uri: str | None,
         model: str,
         resolution: str,
+        last_frame_uri: str | None = None,
     ) -> bytes:
         ...
 
