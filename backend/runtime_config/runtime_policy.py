@@ -48,6 +48,7 @@ def decide_local_generation_mode(
     vram_gb: int | None,
     mps_available: bool = False,
     ram_gb: int | None = None,
+    fp8_capable: bool = True,
 ) -> LocalGenerationMode:
     """Pick the local-generation mode for this runtime.
 
@@ -59,11 +60,15 @@ def decide_local_generation_mode(
 
     On CUDA (Windows/Linux) the memory figure is discrete (total) VRAM, and
     "full_models_loading" (>=31 GB) holds the fp8-halved (~23 GB) transformer
-    resident. On Apple Silicon (Darwin) there is no discrete VRAM — the GPU shares
-    system RAM — so ``ram_gb`` is the *available* (free) RAM, not total: total RAM
-    overstates real headroom once the OS/Electron/app are already running. Gated on
-    MPS being available (i.e. Apple Silicon, not an Intel Mac, which has no MPS
-    backend and stays unsupported).
+    resident. Pass ``fp8_capable=False`` (ROCm today — see
+    ``runtime_config.accelerator.accelerator_backend``) to stay on the streaming
+    path regardless of VRAM: without fp8 the full ~42-46 GB bf16 transformer
+    would try to stay resident at that floor and OOM. On Apple Silicon (Darwin)
+    there is no discrete VRAM — the GPU shares system RAM — so ``ram_gb`` is the
+    *available* (free) RAM, not total: total RAM overstates real headroom once
+    the OS/Electron/app are already running. Gated on MPS being available
+    (i.e. Apple Silicon, not an Intel Mac, which has no MPS backend and stays
+    unsupported). ``fp8_capable`` is ignored on Darwin (no fp8 path on MPS).
 
     Darwin's "full_models_loading" (>=``DARWIN_FULL_RESIDENT_FLOOR_GB``) is NOT the
     same regime as CUDA's: MPS has no fp8 path, so it holds the *full* ~46 GB bf16
@@ -92,6 +97,15 @@ def decide_local_generation_mode(
             return "unsupported"
         if vram_gb < 15:
             return "unsupported"
+        # full_models_loading's >=31 GB floor assumes the fp8-halved (~23 GB) transformer
+        # (see module docstring). Without fp8 (ROCm today — see
+        # runtime_config.accelerator.accelerator_backend), holding the full bf16
+        # (~42-46 GB) transformer resident instead would OOM at this floor, so stay on
+        # the streaming path regardless of VRAM until a real bf16-full-resident floor is
+        # established on non-CUDA hardware.
+        # Originally contributed by boxwrench in https://github.com/Lightricks/LTX-Desktop/pull/160
+        if not fp8_capable:
+            return "streaming_models_loading"
         if vram_gb < 31:
             return "streaming_models_loading"
         return "full_models_loading"

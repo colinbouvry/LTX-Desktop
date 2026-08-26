@@ -445,6 +445,10 @@ class LoraEntry(BaseModel):
     scale: float = Field(default=1.0, ge=0.0, le=4.0)
 
 
+# Local Distilled offering cap. API pipelines stay at 0 via multi_keyframe=False.
+LOCAL_MULTI_KEYFRAME_MAX_COUNT = 10
+
+
 class KeyframeInput(BaseModel):
     """CamelCase of LTXV keyframe-edit `{image_uri, frame_index, strength}`."""
 
@@ -1083,8 +1087,10 @@ class EnhancePromptRequest(BaseModel):
         if has_last and not has_first:
             raise ValueError("Last frame requires a first-frame image")
         if has_keyframes:
-            if len(self.keyframes) > 5:
-                raise ValueError("You can place up to 5 keyframes")
+            if len(self.keyframes) > LOCAL_MULTI_KEYFRAME_MAX_COUNT:
+                raise ValueError(
+                    f"You can place up to {LOCAL_MULTI_KEYFRAME_MAX_COUNT} keyframes"
+                )
             indices = [keyframe.frameIndex for keyframe in self.keyframes]
             if len(set(indices)) != len(indices):
                 raise ValueError("Keyframe frame indices must be unique")

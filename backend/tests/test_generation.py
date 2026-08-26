@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from _routes._errors import HTTPError
-from api_types import GenerateImageRequest, GenerateVideoRequest
+from api_types import (
+    LOCAL_MULTI_KEYFRAME_MAX_COUNT,
+    GenerateImageRequest,
+    GenerateVideoRequest,
+)
 from frame_math import AutoDurationSpec, compute_num_frames
 from runtime_config.model_download_specs import delete_cp_path, get_ltx_model_spec, resolve_model_path
 from services import generation_interrupt
@@ -389,7 +393,9 @@ class TestGenerate:
         )
 
         assert r.status_code == 200
-        images = fake_services.fast_video_pipeline.generate_calls[0]["images"]
+        call = fake_services.fast_video_pipeline.generate_calls[0]
+        images = call["images"]
+        assert call["guide_all_images"] is False
         assert len(images) == 2
         assert images[0].frame_idx == 0
         assert images[0].strength == 1.0
@@ -474,7 +480,7 @@ class TestGenerate:
                 **_T2V_JSON,
                 "keyframes": [
                     {"imagePath": f"/tmp/kf-{index}.png", "frameIndex": index}
-                    for index in range(6)
+                    for index in range(LOCAL_MULTI_KEYFRAME_MAX_COUNT + 1)
                 ],
             },
         )
@@ -482,8 +488,22 @@ class TestGenerate:
             r,
             status_code=422,
             code="INVALID_VIDEO_GENERATION_SPEC",
-            message="You can place up to 5 keyframes",
+            message=f"You can place up to {LOCAL_MULTI_KEYFRAME_MAX_COUNT} keyframes",
         )
+
+    def test_keyframes_cap_allows_exact_limit(self, client):
+        r = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "keyframes": [
+                    {"imagePath": f"/tmp/kf-{index}.png", "frameIndex": index}
+                    for index in range(LOCAL_MULTI_KEYFRAME_MAX_COUNT)
+                ],
+            },
+        )
+
+        assert_http_error(r, status_code=409, code="NO_DOWNLOADED_LTX_MODEL")
 
     def test_keyframes_send_conditionings_at_requested_frames(
         self, client, test_state, fake_services, create_fake_model_files, make_test_image, tmp_path
@@ -507,7 +527,9 @@ class TestGenerate:
         )
 
         assert r.status_code == 200
-        images = fake_services.fast_video_pipeline.generate_calls[0]["images"]
+        call = fake_services.fast_video_pipeline.generate_calls[0]
+        images = call["images"]
+        assert call["guide_all_images"] is True
         assert [(image.frame_idx, image.strength) for image in images] == [(0, 1.0), (80, 1.0)]
         assert images[0].path != images[1].path
 

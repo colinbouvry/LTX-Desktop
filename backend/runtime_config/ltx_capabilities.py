@@ -10,7 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal, assert_never
 
-from api_types import LTXLocalModelId, LTXVideoGenPipeline, LTXVideoGenResolution
+from api_types import (
+    LOCAL_MULTI_KEYFRAME_MAX_COUNT,
+    LTXLocalModelId,
+    LTXVideoGenPipeline,
+    LTXVideoGenResolution,
+)
 
 LtxCapabilityFeature = Literal[
     "t2v",
@@ -80,7 +85,7 @@ _LOCAL_2_3 = LocalOfferingCapabilities(
     retake=True,
     extend=True,
     multi_keyframe=True,
-    multi_keyframe_max_count=5,
+    multi_keyframe_max_count=LOCAL_MULTI_KEYFRAME_MAX_COUNT,
     user_loras=True,
     camera_motion=True,
     auto_duration=False,
@@ -99,7 +104,7 @@ _LOCAL_2_5 = LocalOfferingCapabilities(
     retake=False,
     extend=False,
     multi_keyframe=True,
-    multi_keyframe_max_count=5,
+    multi_keyframe_max_count=LOCAL_MULTI_KEYFRAME_MAX_COUNT,
     user_loras=True,
     camera_motion=True,
     auto_duration=True,

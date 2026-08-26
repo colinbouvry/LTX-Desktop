@@ -336,6 +336,11 @@ export async function startPythonBackend(): Promise<void> {
         // can't shadow PATH entries for backend subprocesses on Windows/Linux.
         ...(process.platform === 'darwin' ? {
           PATH: `${path.dirname(pythonPath)}${path.delimiter}${process.env.PATH ?? ''}`,
+          // Skip mps-sdpa's import-time microbench: it can cache fused_min_bytes=None
+          // ("always stock"), which routes video-length attention through stock MPS
+          // SDPA and OOMs (https://github.com/Lightricks/LTX-Desktop/issues/161).
+          // Honor an explicit parent value (matches setdefault in ltx2_server.py).
+          MPS_SDPA_SKIP_CALIBRATION: process.env.MPS_SDPA_SKIP_CALIBRATION ?? '1',
         } : {}),
         // Only pass LTX_PORT when the developer explicitly set it
         ...(process.env.LTX_PORT ? { LTX_PORT: process.env.LTX_PORT } : {}),

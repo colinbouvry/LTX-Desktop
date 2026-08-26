@@ -6,6 +6,7 @@ import {
   appendKeyframePaths,
   applyKeyframeImagePaths,
   DEFAULT_KEYFRAME_STRENGTH,
+  MISSING_KEYFRAME_STRENGTH,
   fromPersistedKeyframes,
   toPersistedKeyframes,
   videoGenerationModeFromInputs,
@@ -152,13 +153,14 @@ describe('persisted keyframes', () => {
     assert.deepEqual(restored, [item('id-0', '/opening.png', 0, 0.7)])
   })
 
-  it('fills missing persisted strength with the default lock', () => {
+  it('fills missing persisted strength with a full lock, not the new-still default', () => {
     let nextId = 0
     const restored = fromPersistedKeyframes(
       [{ path: '/opening.png', frameIndex: 0 }],
       () => `id-${nextId++}`,
     )
-    assert.deepEqual(restored, [item('id-0', '/opening.png', 0)])
+    assert.deepEqual(restored, [item('id-0', '/opening.png', 0, MISSING_KEYFRAME_STRENGTH)])
+    assert.notEqual(MISSING_KEYFRAME_STRENGTH, DEFAULT_KEYFRAME_STRENGTH)
   })
 
   it('persists and restores a zero lock instead of treating it as missing', () => {
@@ -266,7 +268,7 @@ describe('persistedKeyframeSchema', () => {
   it('defaults missing strength to a full lock', () => {
     assert.deepEqual(
       persistedKeyframeSchema.parse({ path: '/opening.png', frameIndex: 0 }),
-      { path: '/opening.png', frameIndex: 0, strength: DEFAULT_KEYFRAME_STRENGTH },
+      { path: '/opening.png', frameIndex: 0, strength: MISSING_KEYFRAME_STRENGTH },
     )
   })
 

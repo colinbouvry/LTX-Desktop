@@ -1,7 +1,14 @@
 import { clampKeyframeStrength, DEFAULT_KEYFRAME_STRENGTH } from './keyframe-strength.ts'
 import { pickFreeFrameIndex } from './keyframe-timeline.ts'
 
-export { clampKeyframeStrength, DEFAULT_KEYFRAME_STRENGTH } from './keyframe-strength.ts'
+export {
+  clampKeyframeStrength,
+  DEFAULT_KEYFRAME_STRENGTH,
+  MISSING_KEYFRAME_STRENGTH,
+} from './keyframe-strength.ts'
+
+/** Local Distilled cap. Must match backend LOCAL_MULTI_KEYFRAME_MAX_COUNT. API stays 0. */
+export const LOCAL_MULTI_KEYFRAME_MAX_COUNT = 10
 
 export interface KeyframeItem {
   id: string

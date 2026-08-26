@@ -11,6 +11,7 @@ from api_types import (
     IcLoraCatalogItem,
     InputSpec,
     InstructionSection,
+    LOCAL_MULTI_KEYFRAME_MAX_COUNT,
     LoraCatalogItem,
     PromptTemplatePlaceholder,
     PromptTemplateSpec,
@@ -231,7 +232,10 @@ class TestNoSelection:
             "/api/enhance-prompt",
             json={
                 "prompt": "walk the hall",
-                "keyframes": [{"imagePath": f"/tmp/kf-{index}.png", "frameIndex": index} for index in range(6)],
+                "keyframes": [
+                    {"imagePath": f"/tmp/kf-{index}.png", "frameIndex": index}
+                    for index in range(LOCAL_MULTI_KEYFRAME_MAX_COUNT + 1)
+                ],
             },
         )
         assert r.status_code == 422

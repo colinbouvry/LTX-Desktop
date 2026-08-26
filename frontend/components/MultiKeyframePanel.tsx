@@ -104,6 +104,11 @@ export function MultiKeyframePanel({
             )))
             onPlayheadChange(frameIndex)
           }}
+          onStrengthChange={(id, strength) => {
+            onChange(keyframes.map((keyframe) => (
+              keyframe.id === id ? { ...keyframe, strength } : keyframe
+            )))
+          }}
           onReplaceRequest={(id) => openFilePicker(id)}
           onDelete={(id) => onChange(keyframes.filter((keyframe) => keyframe.id !== id))}
           onImagesDrop={(dataTransfer, replaceId) => {

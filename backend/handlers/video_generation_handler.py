@@ -407,6 +407,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     frame_rate=fps,
                     images=images,
                     output_path=str(output_path),
+                    guide_all_images=bool(keyframe_images),
                 )
             t_inference_end = time.perf_counter()
             logger.info("[%s] Inference: %.2fs", gen_mode, t_inference_end - t_inference_start)

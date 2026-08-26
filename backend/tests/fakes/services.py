@@ -725,6 +725,8 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
         frame_rate: float,
         images: list[ImageConditioningInput],
         output_path: str,
+        *,
+        guide_all_images: bool = False,
     ) -> None:
         payload = {
             "prompt": prompt,
@@ -735,6 +737,7 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
             "frame_rate": frame_rate,
             "images": images,
             "output_path": output_path,
+            "guide_all_images": guide_all_images,
         }
         if self.inference_steps:
             from services.generation_interrupt import raise_if_requested
