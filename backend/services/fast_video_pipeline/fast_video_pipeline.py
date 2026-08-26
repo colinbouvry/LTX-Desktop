@@ -39,6 +39,8 @@ class FastVideoPipeline(Protocol):
         frame_rate: float,
         images: list[ImageConditioningInput],
         output_path: str,
+        *,
+        guide_all_images: bool = False,
     ) -> None:
         ...
 

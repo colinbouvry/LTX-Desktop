@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from api_types import LOCAL_MULTI_KEYFRAME_MAX_COUNT
 from runtime_config.ltx_capabilities import (
     LocalOfferingCapabilities,
     api_caps,
@@ -55,7 +56,7 @@ def test_local_2_5_allows_ic_lora_and_user_loras():
     assert supports(caps, "retake") is False
     assert supports(caps, "extend") is False
     assert supports(caps, "multi_keyframe") is True
-    assert caps.multi_keyframe_max_count == 5
+    assert caps.multi_keyframe_max_count == LOCAL_MULTI_KEYFRAME_MAX_COUNT
 
 
 def test_local_2_3_allows_ic_lora_user_loras_retake():
@@ -65,7 +66,7 @@ def test_local_2_3_allows_ic_lora_user_loras_retake():
     assert supports(caps, "retake") is True
     assert supports(caps, "extend") is True
     assert supports(caps, "multi_keyframe") is True
-    assert caps.multi_keyframe_max_count == 5
+    assert caps.multi_keyframe_max_count == LOCAL_MULTI_KEYFRAME_MAX_COUNT
     assert supports(caps, "auto_duration") is False
 
 

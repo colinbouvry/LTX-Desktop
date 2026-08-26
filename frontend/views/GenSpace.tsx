@@ -84,7 +84,15 @@ import {
   modeOptionValues,
   type GenSpaceMode,
 } from '../lib/genspace-multi-keyframe'
-import { applyKeyframeImagePaths, enhanceKeyframesPayload, fromPersistedKeyframes, toPersistedKeyframes, videoGenerationModeFromInputs, type KeyframeItem } from '../lib/multi-keyframe'
+import {
+  applyKeyframeImagePaths,
+  enhanceKeyframesPayload,
+  fromPersistedKeyframes,
+  LOCAL_MULTI_KEYFRAME_MAX_COUNT,
+  toPersistedKeyframes,
+  videoGenerationModeFromInputs,
+  type KeyframeItem,
+} from '../lib/multi-keyframe'
 import { lastFrameFromDuration, previewKeyframeForPlayhead, retimeKeyframesForSettings, sameDraggedFrame, type DraggedFrame } from '../lib/keyframe-timeline'
 import { GenSpaceFilterEmptyState } from './genspace/GenSpaceFilterEmptyState'
 import { GenSpaceGalleryToolbar } from './genspace/GenSpaceGalleryToolbar'
@@ -1489,7 +1497,8 @@ export function GenSpace() {
     RETAKE_EXTEND_MODELS[0],
   )
   const canUseUserLoras = isLocalMode && Boolean(localCaps?.user_loras)
-  const multiKeyframeMaxCount = localCaps?.multi_keyframe_max_count ?? 5
+  const multiKeyframeMaxCount =
+    localCaps?.multi_keyframe_max_count ?? LOCAL_MULTI_KEYFRAME_MAX_COUNT
   const canUseIcLora = !forceApiGenerations && Boolean(localCaps?.ic_lora)
   const canUseRetake = isLocalMode ? Boolean(localCaps?.retake) : Boolean(apiCaps?.retake)
   const canUseExtend = isLocalMode ? Boolean(localCaps?.extend) : Boolean(apiCaps?.extend)

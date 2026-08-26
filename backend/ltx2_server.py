@@ -33,6 +33,16 @@ from pathlib import Path
 # ignores it there. Must be set before importing torch; setdefault lets an explicit env override.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+# Before any mps-sdpa import. Calibration benches the slow pyobjc backend at
+# L<=2048 and can cache fused_min_bytes=None ("always stock"). That then also
+# disables mpsgraph_zc, so video-length attention hits stock MPS SDPA, which
+# materializes S×S (~47 GiB at 720p/5s) and OOMs / wedged-U-state
+# (https://github.com/Lightricks/LTX-Desktop/issues/161). setdefault so a
+# developer override still wins. Remove once mps-sdpa treats None as "use
+# defaults" for large sequences, or calibrates against mpsgraph_zc / video L.
+if sys.platform == "darwin":
+    os.environ.setdefault("MPS_SDPA_SKIP_CALIBRATION", "1")
+
 import torch
 
 # macOS: stage mps-sdpa's prebuilt zero-copy attention extension cache before mps-sdpa
@@ -227,7 +237,7 @@ from app_factory import DEFAULT_ALLOWED_ORIGINS, create_app
 from state import RuntimeConfig, build_initial_state
 from runtime_config.runtime_policy import LocalGenerationMode, decide_local_generation_mode
 from server_utils.model_layout_migration import migrate_legacy_models_layout
-from services.gpu_info.gpu_info_impl import GpuInfoImpl
+from services.gpu_info.gpu_info_impl import GpuInfoImpl, platform_label
 
 migrate_legacy_models_layout(APP_DATA_DIR)
 
@@ -235,11 +245,14 @@ LTX_API_BASE_URL = "https://api.ltx.video"
 
 
 def _resolve_local_generations_mode() -> LocalGenerationMode:
+    from runtime_config.accelerator import accelerator_backend
+
     gpu_info = GpuInfoImpl()
     system = platform.system()
     cuda_available = gpu_info.get_cuda_available()
     mps_available = gpu_info.get_mps_available()
     vram_gb = gpu_info.get_vram_total_gb()
+    fp8_capable = accelerator_backend() == "cuda"
     # On Darwin there's no discrete VRAM (unified memory), so gate on *available* RAM,
     # not total — total overstates real headroom once the OS/Electron/app are running.
     # See GpuInfoImpl.get_available_ram_gb.
@@ -252,16 +265,18 @@ def _resolve_local_generations_mode() -> LocalGenerationMode:
         vram_gb=vram_gb,
         mps_available=mps_available,
         ram_gb=available_ram_gb,
+        fp8_capable=fp8_capable,
     )
     logger.info(
         "Runtime policy local_generations_mode=%s (system=%s cuda_available=%s mps_available=%s "
-        "vram_gb=%s available_ram_gb=%s)",
+        "vram_gb=%s available_ram_gb=%s fp8_capable=%s)",
         mode,
         system,
         cuda_available,
         mps_available,
         vram_gb,
         available_ram_gb,
+        fp8_capable,
     )
     return mode
 
@@ -332,7 +347,7 @@ def log_hardware_info() -> None:
     gpu_info = gpu.get_gpu_info()
     vram_gb = gpu_info["vram"] // 1024 if gpu_info["vram"] else 0
 
-    logger.info(f"Platform: {platform.system()} ({platform.machine()})")
+    logger.info(f"Platform: {platform_label()}")
     logger.info(f"Device: {DEVICE}  |  Dtype: {DTYPE}")
     gpu_line = f"GPU: {gpu_info['name']}  |  VRAM: {vram_gb} GB"
     # On Apple Silicon there's no discrete VRAM — the figure above is total unified
@@ -344,6 +359,8 @@ def log_hardware_info() -> None:
             "LTX 2.5 decode uses eager SDPA on Mac (no Triton; slower than Linux/Windows)."
         )
     logger.info(gpu_line)
+    from runtime_config.accelerator import accelerator_backend
+    logger.info(f"Accelerator: {accelerator_backend()}  |  HIP: {getattr(torch.version, 'hip', None)}")
     logger.info(f"SageAttention: {'enabled' if use_sage_attention else 'disabled'}")
     logger.info(f"Python: {sys.version.split()[0]}  |  Torch: {torch.__version__}")
 

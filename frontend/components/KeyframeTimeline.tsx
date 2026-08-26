@@ -1,6 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { RefreshCw, Trash2 } from 'lucide-react'
 import { applyTimecode, nudgeKeyframe } from '../lib/keyframe-controls'
+import {
+  formatKeyframeStrength,
+  nudgeKeyframeStrength,
+} from '../lib/keyframe-strength'
 import {
   findNearestFreeFrameIndex,
   formatKeyframeTimecode,
@@ -11,6 +15,7 @@ import {
 } from '../lib/keyframe-timeline'
 import type { KeyframeItem } from '../lib/multi-keyframe'
 import { pathToFileUrl } from '../lib/file-url'
+import { KeyframeStrengthRail } from './KeyframeStrengthRail'
 
 interface KeyframeTimelineProps {
   keyframes: readonly KeyframeItem[]
@@ -20,6 +25,7 @@ interface KeyframeTimelineProps {
   onPlayheadChange: (frameIndex: number) => void
   onDragFrameChange?: (drag: DraggedFrame | null) => void
   onFrameChange: (id: string, frameIndex: number) => void
+  onStrengthChange: (id: string, strength: number) => void
   onReplaceRequest: (id: string) => void
   onDelete: (id: string) => void
   onImagesDrop: (dataTransfer: DataTransfer, replaceId: string | null) => void
@@ -29,7 +35,6 @@ interface DragState {
   id: string
   frameIndex: number
   pointerId: number
-  startClientX: number
 }
 
 export function KeyframeTimeline({
@@ -40,12 +45,12 @@ export function KeyframeTimeline({
   onPlayheadChange,
   onDragFrameChange,
   onFrameChange,
+  onStrengthChange,
   onReplaceRequest,
   onDelete,
   onImagesDrop,
 }: KeyframeTimelineProps) {
   const trackRef = useRef<HTMLDivElement>(null)
-  const suppressMarkerClickRef = useRef(false)
   const dragRef = useRef<DragState | null>(null)
   const onDragFrameChangeRef = useRef(onDragFrameChange)
   onDragFrameChangeRef.current = onDragFrameChange
@@ -95,7 +100,6 @@ export function KeyframeTimeline({
   const finishDrag = (event: React.PointerEvent<HTMLElement>) => {
     const activeDrag = dragRef.current
     if (!activeDrag || activeDrag.pointerId !== event.pointerId) return
-    suppressMarkerClickRef.current = Math.abs(event.clientX - activeDrag.startClientX) > 3
     const otherKeyframes = keyframes.filter((keyframe) => keyframe.id !== activeDrag.id)
     const frameIndex = findNearestFreeFrameIndex(otherKeyframes, frameAtPointer(event.clientX), lastFrame)
     if (frameIndex !== null) onFrameChange(activeDrag.id, frameIndex)
@@ -139,6 +143,7 @@ export function KeyframeTimeline({
         {displayed.map((keyframe) => {
           const markerFrame = keyframe.frameIndex
           const source = keyframes.find((item) => item.id === keyframe.id) ?? keyframe
+          const timecode = formatKeyframeTimecode(markerFrame, fps)
           return (
             <div
               key={keyframe.id}
@@ -153,9 +158,9 @@ export function KeyframeTimeline({
             >
               <button
                 type="button"
-                title="Replace keyframe image"
-                aria-label={`Replace keyframe at ${formatKeyframeTimecode(markerFrame, fps)}`}
-                className="block h-11 w-11 cursor-ew-resize overflow-hidden rounded-md border-2 border-blue-500 bg-zinc-900 shadow-lg"
+                title="Drag to move keyframe"
+                aria-label={`Keyframe at ${timecode}`}
+                className="relative block h-11 w-11 cursor-ew-resize overflow-hidden rounded-md border-2 border-blue-500 bg-zinc-900 shadow-lg"
                 onPointerDown={(event) => {
                   event.preventDefault()
                   event.stopPropagation()
@@ -165,13 +170,21 @@ export function KeyframeTimeline({
                     id: keyframe.id,
                     frameIndex: source.frameIndex,
                     pointerId: event.pointerId,
-                    startClientX: event.clientX,
                   })
                 }}
                 onPointerMove={handlePointerMove}
                 onPointerUp={finishDrag}
                 onPointerCancel={() => updateDrag(null)}
                 onKeyDown={(event) => {
+                  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    onStrengthChange(
+                      keyframe.id,
+                      nudgeKeyframeStrength(source.strength, event.key === 'ArrowUp' ? 1 : -1),
+                    )
+                    return
+                  }
                   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
                   event.preventDefault()
                   event.stopPropagation()
@@ -183,14 +196,6 @@ export function KeyframeTimeline({
                   )
                   if (frameIndex !== null) onFrameChange(keyframe.id, frameIndex)
                 }}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  if (suppressMarkerClickRef.current) {
-                    suppressMarkerClickRef.current = false
-                    return
-                  }
-                  onReplaceRequest(keyframe.id)
-                }}
               >
                 <img
                   src={pathToFileUrl(source.path)}
@@ -198,27 +203,50 @@ export function KeyframeTimeline({
                   draggable={false}
                   className="h-full w-full object-cover"
                 />
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-zinc-950/70 py-px text-center text-[9px] font-medium text-blue-200">
+                  {formatKeyframeStrength(source.strength)}
+                </span>
               </button>
-              <button
-                type="button"
-                data-keyframe-delete
-                title="Delete keyframe"
-                aria-label={`Delete keyframe at ${formatKeyframeTimecode(markerFrame, fps)}`}
-                className="absolute -right-2 -top-2 rounded-full bg-zinc-800 p-1 text-zinc-400 opacity-0 shadow group-hover:opacity-100 hover:text-red-300"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onDelete(keyframe.id)
-                }}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
+              <KeyframeStrengthRail
+                strength={source.strength}
+                label={timecode}
+                onStrengthChange={(strength) => onStrengthChange(keyframe.id, strength)}
+              />
+              <div className="absolute -right-3 -top-2 z-20 flex gap-0.5 opacity-0 shadow group-hover:opacity-100 group-focus-within:opacity-100">
+                <button
+                  type="button"
+                  data-keyframe-replace
+                  title="Replace keyframe image"
+                  aria-label={`Replace keyframe at ${timecode}`}
+                  className="rounded-full bg-zinc-800 p-1 text-zinc-400 hover:text-blue-300"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onReplaceRequest(keyframe.id)
+                  }}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  data-keyframe-delete
+                  title="Delete keyframe"
+                  aria-label={`Delete keyframe at ${timecode}`}
+                  className="rounded-full bg-zinc-800 p-1 text-zinc-400 hover:text-red-300"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onDelete(keyframe.id)
+                  }}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
               <input
                 type="text"
                 aria-label={`Timecode for keyframe at frame ${markerFrame}`}
                 className="absolute left-1/2 top-full mt-0.5 h-4 w-[66px] -translate-x-1/2 rounded border border-transparent bg-zinc-950/90 px-1 text-center font-mono text-[9px] text-zinc-400 outline-none hover:border-zinc-700 focus:border-blue-500 focus:text-zinc-200"
                 value={timecodeDraft?.id === keyframe.id
                   ? timecodeDraft.value
-                  : formatKeyframeTimecode(markerFrame, fps)}
+                  : timecode}
                 onFocus={(event) => {
                   setTimecodeDraft({ id: keyframe.id, value: event.currentTarget.value })
                 }}
@@ -230,7 +258,7 @@ export function KeyframeTimeline({
                   event.stopPropagation()
                   if (event.key === 'Enter') event.currentTarget.blur()
                   if (event.key === 'Escape') {
-                    event.currentTarget.value = formatKeyframeTimecode(markerFrame, fps)
+                    event.currentTarget.value = timecode
                     event.currentTarget.blur()
                   }
                 }}

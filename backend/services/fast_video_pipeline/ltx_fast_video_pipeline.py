@@ -107,9 +107,14 @@ class LTXFastVideoPipeline:
         frame_rate: float,
         images: list[ImageConditioningInput],
         tiling_config: PipelineTilingType,
+        *,
+        guide_all_images: bool = False,
     ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone, int, TilingConfigType | None]:
+        from contextlib import nullcontext
+
         from ltx_pipelines.utils.args import ImageConditioningInput as _LtxImageInput
         from ltx_pipelines.utils.types import AutoDuration
+        from services.fast_video_pipeline.distilled_keyframe_guiding import distilled_keyframe_guiding
 
         pipeline_num_frames: int | AutoDuration = (
             AutoDuration(min_seconds=num_frames.min_seconds, max_seconds=num_frames.max_seconds)
@@ -117,16 +122,18 @@ class LTXFastVideoPipeline:
             else num_frames
         )
 
-        video, audio, resolved_frames, resolved_tiling = self.pipeline(
-            prompt=prompt,
-            seed=seed,
-            height=height,
-            width=width,
-            num_frames=pipeline_num_frames,
-            frame_rate=frame_rate,
-            images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
-            tiling_config=tiling_config,
-        )
+        ctx = distilled_keyframe_guiding() if guide_all_images else nullcontext()
+        with ctx:
+            video, audio, resolved_frames, resolved_tiling = self.pipeline(
+                prompt=prompt,
+                seed=seed,
+                height=height,
+                width=width,
+                num_frames=pipeline_num_frames,
+                frame_rate=frame_rate,
+                images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
+                tiling_config=tiling_config,
+            )
         return video, audio, resolved_frames, resolved_tiling
 
     @torch.inference_mode()
@@ -140,6 +147,8 @@ class LTXFastVideoPipeline:
         frame_rate: float,
         images: list[ImageConditioningInput],
         output_path: str,
+        *,
+        guide_all_images: bool = False,
     ) -> None:
         video, audio, resolved_frames, resolved_tiling = self._run_inference(
             prompt=prompt,
@@ -150,6 +159,7 @@ class LTXFastVideoPipeline:
             frame_rate=frame_rate,
             images=images,
             tiling_config=auto_tiling_config(),
+            guide_all_images=guide_all_images,
         )
         chunks = video_chunks_number(resolved_frames, resolved_tiling)
         encode_video_output(video=video, audio=audio, fps=int(frame_rate), output_path=output_path, video_chunks_number_value=chunks)
