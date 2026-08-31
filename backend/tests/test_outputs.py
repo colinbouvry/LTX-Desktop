@@ -169,3 +169,34 @@ class TestGenerationProvenance:
         body = client.get("/api/outputs").json()
 
         assert body["outputs"][0]["generation_params"] is None
+
+    def test_ic_lora_renders_are_recorded_too(self, client, tmp_path, create_fake_model_files, fake_services):
+        """CrossView and other IC-LoRA runs write to the same folder as plain generations.
+
+        Without a sidecar they look like hand-dropped files, so the app never picks them
+        up -- which is exactly how multicam angles went missing.
+        """
+        create_fake_model_files()
+        assert client.post("/api/ic-loras/download", json={"ic_lora_id": "ingredients-v1"}).status_code == 200
+        image = tmp_path / "reference.png"
+        image.write_bytes(b"\x89PNG\r\n")
+
+        response = client.post(
+            "/api/ic-lora/generate",
+            json={
+                "ic_lora_id": "ingredients-v1",
+                "input_path": str(image),
+                "control_values": {"duration": 5},
+                "prompt": "crossview. new camera angle: to the right, lower, closer.",
+                "conditioning_type": "custom",
+            },
+        )
+
+        assert response.status_code == 200
+        sidecar = Path(response.json()["video_path"] + ".gen.json")
+        assert sidecar.is_file()
+
+        recorded = json.loads(sidecar.read_text(encoding="utf-8"))
+        assert recorded["mode"] == "ic-lora"
+        assert recorded["model"] == "ingredients-v1"
+        assert recorded["prompt"].startswith("crossview.")

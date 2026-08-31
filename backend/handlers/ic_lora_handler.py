@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from api_types import (
     ConditioningType,
     IcLoraExtractRequest,
+    OutputGenerationParams,
     IcLoraExtractResponse,
     IcLoraGenerateCancelledResponse,
     IcLoraGenerateCompleteResponse,
@@ -25,6 +26,7 @@ from api_types import (
 )
 from _routes._errors import HTTPError
 from frame_math import compute_num_frames, snap_to_frame_grid
+from handlers.outputs_handler import write_generation_sidecar
 from handlers.base import StateHandlerBase
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
@@ -257,12 +259,36 @@ class IcLoraHandler(StateHandlerBase):
             return None
         return OutpaintParams(left=p.left, right=p.right, top=p.top, bottom=p.bottom)
 
-    def _complete_or_drop_cancelled(self, output_path: Path) -> None:
+    def _complete_or_drop_cancelled(
+        self,
+        output_path: Path,
+        req: IcLoraGenerateRequest,
+        *,
+        width: int,
+        height: int,
+        fps: float,
+    ) -> None:
         # Denoiser interrupt cannot abort VAE decode / ffmpeg; a Stop after the last
         # denoise step still finishes encode, then this check drops the file.
         if self._generation.is_generation_cancelled():
             output_path.unlink(missing_ok=True)
             raise GenerationCancelledError()
+        # Provenance, same as the plain generation path. Without it the app cannot tell
+        # an IC-LoRA render from a file dropped in by hand, so it never reaches a project.
+        write_generation_sidecar(
+            str(output_path),
+            OutputGenerationParams(
+                mode="ic-lora",
+                prompt=req.prompt,
+                model=req.ic_lora_id or "custom",
+                resolution=f"{width}x{height}",
+                # A re-render inherits the reference's shape rather than picking one.
+                aspect_ratio="source",
+                fps=int(round(fps)),
+                audio=req.audio_mode != "off",
+                camera_motion="none",
+            ),
+        )
         self._generation.update_progress("complete", 100, 1, 1)
         self._generation.complete_generation(str(output_path))
 
@@ -413,7 +439,7 @@ class IcLoraHandler(StateHandlerBase):
                         mute_audio=s.audio_mode == "off",
                         conditioning_mask_path=control.mask_path,
                     )
-                self._complete_or_drop_cancelled(output_path)
+                self._complete_or_drop_cancelled(output_path, req, width=width, height=height, fps=fps)
                 return IcLoraGenerateCompleteResponse(status="complete", video_path=str(output_path))
             except HTTPError:
                 self._generation.fail_generation("IC-LoRA generation failed")
@@ -646,7 +672,7 @@ class IcLoraHandler(StateHandlerBase):
                     t_inference_end - t_inference_start,
                 )
 
-                self._complete_or_drop_cancelled(output_path)
+                self._complete_or_drop_cancelled(output_path, req, width=width, height=height, fps=fps)
                 return IcLoraGenerateCompleteResponse(status="complete", video_path=str(output_path))
 
             except HTTPError:
