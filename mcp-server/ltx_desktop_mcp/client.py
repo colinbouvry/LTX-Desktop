@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 import httpx
+from mcp.server.mcpserver.exceptions import ToolError
 
 DEFAULT_BASE_URL = "http://127.0.0.1:41954"
 
@@ -39,8 +40,13 @@ _ERROR_HINTS: dict[str, str] = {
 }
 
 
-class BackendError(RuntimeError):
-    """A backend call failed in a way worth reporting verbatim to the agent."""
+class BackendError(ToolError):
+    """A backend call failed in a way worth reporting verbatim to the agent.
+
+    Subclasses ToolError deliberately: the MCP SDK carries a ToolError's message to the
+    caller, while any other exception is reported as a generic crash with its text kept
+    server-side. These messages carry the recovery steps, so they must survive.
+    """
 
 
 def base_url() -> str:

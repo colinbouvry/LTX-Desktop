@@ -68,6 +68,19 @@ server refuses to start one while the app is rendering.
 }
 ```
 
+## Tests
+
+```bash
+uv sync --extra test
+uv run pytest
+```
+
+The suite drives the tools against a fake backend served over a real loopback socket,
+so the same httpx client, headers, status handling and timeouts run as in production —
+no patching. It covers the behaviours that are easy to get wrong: that starting a render
+returns before it finishes, that a failed render surfaces its error instead of reporting
+idle, and that a render started from the desktop app is not clobbered.
+
 ## Environment
 
 | Variable | Default | Meaning |

@@ -54,6 +54,29 @@ def _render(payload: dict[str, Any], response_format: ResponseFormat, title: str
     return "\n".join(lines)
 
 
+def _envelope_lines(table: dict[str, Any]) -> list[str]:
+    """Render a resolution/fps/duration table, collapsing rows that repeat.
+
+    Every (resolution, fps) pair usually carries the same duration list, so one line
+    each restates it dozens of times for no added information. Group by what actually
+    differs and print only that.
+    """
+    by_shape: dict[tuple[str, str], list[str]] = {}
+    for resolution, detail in table.items():
+        for fps, durations in (detail.get("fps_to_durations") or {}).items():
+            key = (str(fps), ", ".join(str(d) for d in durations))
+            by_shape.setdefault(key, []).append(str(resolution))
+
+    merged: dict[tuple[str, str], list[str]] = {}
+    for (fps, durations), resolutions in by_shape.items():
+        merged.setdefault((durations, ", ".join(resolutions)), []).append(fps)
+
+    return [
+        f"- {resolutions} @ {', '.join(fps_list)} fps -> {durations}s"
+        for (durations, resolutions), fps_list in merged.items()
+    ]
+
+
 async def _backend_is_busy() -> bool:
     """True when any generation is running, including one started by the desktop app."""
     progress = await client.request("GET", "/api/generation/progress")
@@ -285,10 +308,7 @@ async def ltx_list_models(response_format: ResponseFormat = "markdown") -> str:
         for item in entries:
             spec = item.get("spec", {})
             lines.append(f"\n### {spec.get('display_name', item.get('pipeline'))}")
-            table = spec.get("supported_resolutions_durations") or {}
-            for resolution, detail in table.items():
-                for fps, durations in (detail.get("fps_to_durations") or {}).items():
-                    lines.append(f"- {resolution} @ {fps}fps: {durations}s")
+            lines.extend(_envelope_lines(spec.get("supported_resolutions_durations") or {}))
     return "\n".join(lines) or "No models reported."
 
 
