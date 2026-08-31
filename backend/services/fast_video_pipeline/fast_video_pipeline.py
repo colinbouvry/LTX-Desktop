@@ -26,6 +26,9 @@ class FastVideoPipeline(Protocol):
         video_vae_path: str | None = None,
         audio_vae_path: str | None = None,
         duration_head_path: str | None = None,
+        # Only the non-distilled implementation uses this; the distilled one has no
+        # second-stage adapter to load.
+        stage_2_lora_path: str | None = None,
     ) -> "FastVideoPipeline":
         ...
 
@@ -41,6 +44,10 @@ class FastVideoPipeline(Protocol):
         output_path: str,
         *,
         guide_all_images: bool = False,
+        # Honoured only where guidance exists. The distilled pipeline has no parameter
+        # for it, so its implementation rejects a non-empty value rather than dropping
+        # it silently -- callers must consult capabilities first.
+        negative_prompt: str | None = None,
     ) -> None:
         ...
 

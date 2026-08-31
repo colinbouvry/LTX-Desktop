@@ -35,6 +35,8 @@ from runtime_config.model_download_specs import (
 
 _LTX_2_5_NATIVE_CPS: tuple[ModelCheckpointID, ...] = (
     "ltx-2.5-22b-distilled",
+    "ltx-2.5-22b-dev",
+    "ltx-2.5-22b-distilled-lora",
     "ltx-2.5-spatial-upscaler-x2-1.0",
     "ltx-2.5-video-vae",
     "ltx-2.5-video-vae-conv",

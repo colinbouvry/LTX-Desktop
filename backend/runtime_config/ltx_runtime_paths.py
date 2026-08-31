@@ -24,6 +24,9 @@ class ResolvedLtxModelPaths:
     video_vae_path: str | None
     audio_vae_path: str | None
     duration_head_path: str | None
+    # Stage-2 refinement adapter. Only the non-distilled model declares one; the
+    # distilled pipeline has no second-stage adapter to load.
+    stage_2_lora_path: str | None = None
 
 
 def resolve_ltx_runtime_paths(
@@ -55,9 +58,15 @@ def resolve_ltx_runtime_paths(
         audio_vae_path = str(get_existing_cp_path(models_dir, spec.audio_vae_cp))
     if spec.duration_head_cp is not None and is_cp_downloaded(models_dir, spec.duration_head_cp):
         duration_head_path = str(get_existing_cp_path(models_dir, spec.duration_head_cp))
+    stage_2_lora_path: str | None = None
+    if spec.stage_2_lora_cp is not None:
+        # Required where declared: without it stage 2 upsamples with no adapter, which
+        # produces a soft result and no error at all.
+        stage_2_lora_path = str(get_existing_cp_path(models_dir, spec.stage_2_lora_cp))
     return ResolvedLtxModelPaths(
         checkpoint_path=str(get_existing_cp_path(models_dir, spec.model_cp)),
         upsampler_path=str(get_existing_cp_path(models_dir, spec.upscale_cp)),
+        stage_2_lora_path=stage_2_lora_path,
         gemma_root=gemma_root,
         video_vae_path=video_vae_path,
         audio_vae_path=audio_vae_path,

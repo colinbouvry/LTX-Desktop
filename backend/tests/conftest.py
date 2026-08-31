@@ -87,6 +87,9 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         ltx_api_client=fake_services.ltx_api_client,
         zit_api_client=fake_services.zit_api_client,
         fast_video_pipeline_class=type(fake_services.fast_video_pipeline),
+        # The non-distilled path shares the fake: tests exercise selection and
+        # wiring, not the two-stage sampler itself.
+        quality_video_pipeline_class=type(fake_services.fast_video_pipeline),
         image_generation_pipeline_class=type(fake_services.image_generation_pipeline),
         ic_lora_pipeline_class=type(fake_services.ic_lora_pipeline),
         depth_processor_pipeline_class=type(fake_services.depth_processor_pipeline),
@@ -148,6 +151,9 @@ def create_fake_model_files(test_state):
             ltx_spec.video_vae_conv_cp,
             ltx_spec.audio_vae_cp,
             ltx_spec.duration_head_cp,
+            # Declared only by the non-distilled model; resolving its paths fails
+            # without the file, so the bundle is incomplete unless it is created too.
+            ltx_spec.stage_2_lora_cp,
         ):
             if cp_id is None:
                 continue

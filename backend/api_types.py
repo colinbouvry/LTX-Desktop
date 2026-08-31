@@ -18,6 +18,8 @@ ModelCheckpointID = Literal[
     "ltx-2.3-spatial-upscaler-x2-1.1",
     "ltx-2.3-22b-ic-lora-union-control-ref0.5",
     "ltx-2.5-22b-distilled",
+    "ltx-2.5-22b-dev",
+    "ltx-2.5-22b-distilled-lora",
     "ltx-2.5-spatial-upscaler-x2-1.0",
     "ltx-2.5-video-vae",
     "ltx-2.5-video-vae-conv",
@@ -33,6 +35,9 @@ ModelCheckpointID = Literal[
 ]
 LTXLocalModelId = Literal[
     "ltx-2.5-22b-distilled",
+    # Non-distilled 2.5. Runs the two-stage pipeline with a real CFG scale and a
+    # negative prompt, neither of which exists on the distilled path.
+    "ltx-2.5-22b-dev",
     "ltx-2.3-22b-distilled-1.1",
     "ltx-2.3-22b-distilled",
 ]

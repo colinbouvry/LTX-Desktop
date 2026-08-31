@@ -652,6 +652,8 @@ class _FakeVideoPipelineBase:
         self.warmup_calls: list[dict[str, Any]] = []
         self.compile_calls = 0
         self.create_loras: list[list[tuple[str, float]]] = []
+        self.create_stage_2_lora_paths: list[str | None] = []
+        self.create_duration_head_paths: list[str | None] = []
         self.raise_on_generate: Exception | None = None
         self.inference_steps = 0
         self.step_delay_s = 0.0
@@ -698,6 +700,7 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
         video_vae_path: str | None = None,
         audio_vae_path: str | None = None,
         duration_head_path: str | None = None,
+        stage_2_lora_path: str | None = None,
     ) -> "FakeFastVideoPipeline":
         del (
             checkpoint_path,
@@ -707,12 +710,15 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
             streaming_prefetch_count,
             video_vae_path,
             audio_vae_path,
-            duration_head_path,
         )
         pipeline = FakeFastVideoPipeline._singleton
         if pipeline is None:
             raise RuntimeError("FakeFastVideoPipeline singleton is not bound")
         pipeline.create_loras.append(list(loras or []))
+        # Recorded so a test can assert which pipeline the handler selected: only the
+        # non-distilled checkpoint declares a stage-2 adapter.
+        pipeline.create_stage_2_lora_paths.append(stage_2_lora_path)
+        pipeline.create_duration_head_paths.append(duration_head_path)
         return pipeline
 
     def generate(
@@ -727,6 +733,7 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
         output_path: str,
         *,
         guide_all_images: bool = False,
+        negative_prompt: str | None = None,
     ) -> None:
         payload = {
             "prompt": prompt,

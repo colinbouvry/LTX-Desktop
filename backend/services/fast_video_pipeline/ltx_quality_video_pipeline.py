@@ -1,10 +1,15 @@
-"""LTX fast video pipeline wrapper."""
+"""Non-distilled two-stage pipeline, exposed under the same protocol as the fast one.
+
+Stage 1 runs the base transformer with a real CFG scale and a negative prompt; stage 2
+upsamples and refines with a distilled adapter. Neither guidance nor a negative prompt
+exists on the distilled path -- ``DistilledPipeline.__call__`` has no parameter for
+either -- so this is what those controls come from, not a quality setting.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import os
-from typing import Final
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 import torch
 
@@ -17,11 +22,18 @@ from services.ltx_pipeline_common import (
     offload_mode_for_prefetch_count,
     video_chunks_number,
 )
-from services.services_utils import AudioOrNone, PipelineTilingType, TilingConfigType, device_supports_fp8
+from services.services_utils import device_supports_fp8
+
+from services.services_utils import AudioOrNone, PipelineTilingType, TilingConfigType
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
-class LTXFastVideoPipeline:
-    pipeline_kind: Final = "fast"
+class LTXQualityVideoPipeline:
+    """Wraps ``TI2VidTwoStagesPipeline`` for the non-distilled checkpoint."""
+
+    pipeline_kind: ClassVar[Literal["fast"]] = "fast"
 
     @staticmethod
     def create(
@@ -36,8 +48,8 @@ class LTXFastVideoPipeline:
         audio_vae_path: str | None = None,
         duration_head_path: str | None = None,
         stage_2_lora_path: str | None = None,
-    ) -> "LTXFastVideoPipeline":
-        return LTXFastVideoPipeline(
+    ) -> "LTXQualityVideoPipeline":
+        return LTXQualityVideoPipeline(
             checkpoint_path=checkpoint_path,
             gemma_root=gemma_root,
             upsampler_path=upsampler_path,
@@ -47,6 +59,7 @@ class LTXFastVideoPipeline:
             video_vae_path=video_vae_path,
             audio_vae_path=audio_vae_path,
             duration_head_path=duration_head_path,
+            stage_2_lora_path=stage_2_lora_path,
         )
 
     def __init__(
@@ -61,29 +74,33 @@ class LTXFastVideoPipeline:
         video_vae_path: str | None = None,
         audio_vae_path: str | None = None,
         duration_head_path: str | None = None,
+        stage_2_lora_path: str | None = None,
     ) -> None:
         from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
         from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
         from ltx_core.quantization.fp8_cast import build_policy as build_fp8_cast_policy
-        from ltx_pipelines.distilled import DistilledPipeline
+        from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
+        from ltx_pipelines.utils.constants import detect_params
+
+        if stage_2_lora_path is None:
+            raise ValueError(
+                "The non-distilled pipeline needs its stage-2 refinement LoRA. Without it "
+                "stage 2 upsamples with no adapter and the result is soft."
+            )
 
         self._checkpoint_path = checkpoint_path
-        self._gemma_root = gemma_root
-        self._upsampler_path = upsampler_path
-        self._video_vae_path = video_vae_path
-        self._audio_vae_path = audio_vae_path
-        self._duration_head_path = duration_head_path
         self._device = device
-        self._offload_mode = offload_mode_for_prefetch_count(streaming_prefetch_count, device)
-        self._quantization = build_fp8_cast_policy(checkpoint_path) if device_supports_fp8(device) else None
-        self._loras = loras or []
+        # Sampler settings come from the checkpoint's own model_version rather than a
+        # constant: the library ships presets per generation and picking one by hand
+        # silently mismatches the schedule.
+        self._params = detect_params(checkpoint_path)
 
         lora_entries = [
             LoraPathStrengthAndSDOps(path=path, strength=scale, sd_ops=LTXV_LORA_COMFY_RENAMING_MAP)
-            for path, scale in self._loras
+            for path, scale in (loras or [])
         ]
 
-        self.pipeline = DistilledPipeline(
+        self.pipeline = TI2VidTwoStagesPipeline(
             model_paths=build_model_paths(
                 checkpoint_path,
                 gemma_root,
@@ -91,16 +108,26 @@ class LTXFastVideoPipeline:
                 audio_vae_path=audio_vae_path,
                 duration_head_path=duration_head_path,
             ),
+            distilled_lora=[
+                LoraPathStrengthAndSDOps(
+                    path=stage_2_lora_path,
+                    strength=1.0,
+                    # The renaming map is not optional: without it the adapter's keys match
+                    # nothing in the transformer and stage 2 runs unrefined, with no error.
+                    sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
+                )
+            ],
             spatial_upsampler_path=upsampler_path,
             loras=lora_entries,
             device=device,
-            quantization=self._quantization,
-            offload_mode=self._offload_mode,
+            quantization=build_fp8_cast_policy(checkpoint_path) if device_supports_fp8(device) else None,
+            offload_mode=offload_mode_for_prefetch_count(streaming_prefetch_count, device),
         )
 
     def _run_inference(
         self,
         prompt: str,
+        negative_prompt: str,
         seed: int,
         height: int,
         width: int,
@@ -108,14 +135,11 @@ class LTXFastVideoPipeline:
         frame_rate: float,
         images: list[ImageConditioningInput],
         tiling_config: PipelineTilingType,
-        *,
-        guide_all_images: bool = False,
-    ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone, int, TilingConfigType | None]:
-        from contextlib import nullcontext
-
+    ) -> tuple["torch.Tensor | Iterator[torch.Tensor]", AudioOrNone, int, TilingConfigType | None]:
+        # The app carries its own conditioning and duration types; the pipeline wants the
+        # library's. Same conversion the distilled wrapper performs.
         from ltx_pipelines.utils.args import ImageConditioningInput as _LtxImageInput
         from ltx_pipelines.utils.types import AutoDuration
-        from services.fast_video_pipeline.distilled_keyframe_guiding import distilled_keyframe_guiding
 
         pipeline_num_frames: int | AutoDuration = (
             AutoDuration(min_seconds=num_frames.min_seconds, max_seconds=num_frames.max_seconds)
@@ -123,18 +147,20 @@ class LTXFastVideoPipeline:
             else num_frames
         )
 
-        ctx = distilled_keyframe_guiding() if guide_all_images else nullcontext()
-        with ctx:
-            video, audio, resolved_frames, resolved_tiling = self.pipeline(
-                prompt=prompt,
-                seed=seed,
-                height=height,
-                width=width,
-                num_frames=pipeline_num_frames,
-                frame_rate=frame_rate,
-                images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
-                tiling_config=tiling_config,
-            )
+        video, audio, resolved_frames, resolved_tiling = self.pipeline(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            height=height,
+            width=width,
+            frame_rate=frame_rate,
+            num_inference_steps=self._params.num_inference_steps,
+            video_guider_params=self._params.video_guider_params,
+            audio_guider_params=self._params.audio_guider_params,
+            images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
+            num_frames=pipeline_num_frames,
+            tiling_config=tiling_config,
+        )
         return video, audio, resolved_frames, resolved_tiling
 
     @torch.inference_mode()
@@ -152,16 +178,9 @@ class LTXFastVideoPipeline:
         guide_all_images: bool = False,
         negative_prompt: str | None = None,
     ) -> None:
-        if negative_prompt:
-            # DistilledPipeline.__call__ takes no negative_prompt: with no CFG there is
-            # nothing for one to act on. Failing here beats accepting it and discarding
-            # it, which is what this path did before and left users guessing.
-            raise ValueError(
-                "The distilled model has no guidance, so it cannot honour a negative "
-                "prompt. Switch to the non-distilled model to use one."
-            )
         video, audio, resolved_frames, resolved_tiling = self._run_inference(
             prompt=prompt,
+            negative_prompt=negative_prompt or "",
             seed=seed,
             height=height,
             width=width,
@@ -169,55 +188,40 @@ class LTXFastVideoPipeline:
             frame_rate=frame_rate,
             images=images,
             tiling_config=auto_tiling_config(),
-            guide_all_images=guide_all_images,
         )
         chunks = video_chunks_number(resolved_frames, resolved_tiling)
-        encode_video_output(video=video, audio=audio, fps=int(frame_rate), output_path=output_path, video_chunks_number_value=chunks)
+        encode_video_output(
+            video=video,
+            audio=audio,
+            fps=int(frame_rate),
+            output_path=output_path,
+            video_chunks_number_value=chunks,
+        )
 
     @torch.inference_mode()
     def warmup(self, output_path: str) -> None:
-        warmup_frames = 9
-
         try:
             video, audio, resolved_frames, resolved_tiling = self._run_inference(
                 prompt="test warmup",
+                negative_prompt="",
                 seed=42,
                 height=256,
                 width=384,
-                num_frames=warmup_frames,
+                num_frames=9,
                 frame_rate=8,
                 images=[],
                 tiling_config=auto_tiling_config(),
             )
             chunks = video_chunks_number(resolved_frames, resolved_tiling)
-            encode_video_output(video=video, audio=audio, fps=8, output_path=output_path, video_chunks_number_value=chunks)
+            encode_video_output(
+                video=video, audio=audio, fps=8, output_path=output_path, video_chunks_number_value=chunks
+            )
         finally:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
     def compile_transformer(self) -> None:
-        from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
-        from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
-        from ltx_core.model.transformer.compiling import CompilationConfig
-        from ltx_pipelines.distilled import DistilledPipeline
-
-        lora_entries = [
-            LoraPathStrengthAndSDOps(path=path, strength=scale, sd_ops=LTXV_LORA_COMFY_RENAMING_MAP)
-            for path, scale in self._loras
-        ]
-
-        self.pipeline = DistilledPipeline(
-            model_paths=build_model_paths(
-                self._checkpoint_path,
-                self._gemma_root,
-                video_vae_path=self._video_vae_path,
-                audio_vae_path=self._audio_vae_path,
-                duration_head_path=self._duration_head_path,
-            ),
-            spatial_upsampler_path=self._upsampler_path,
-            loras=lora_entries,
-            device=self._device,
-            quantization=self._quantization,
-            offload_mode=self._offload_mode,
-            compilation_config=CompilationConfig(),
-        )
+        # torch.compile is not wired for this path yet. The distilled pipeline compiles a
+        # single resident transformer; this one streams two stages, so the same treatment
+        # does not transfer unchanged.
+        return

@@ -620,13 +620,17 @@ class TestLtxVersionEndpoints:
         response = client.get("/api/models/ltx-versions")
         assert response.status_code == 200
         versions = response.json()["versions"]
+        # The non-distilled 2.5 sits beside the distilled one, not above it: same
+        # generation, a different trade (slower, but takes guidance and a negative
+        # prompt). Ordering stays newest-generation-first.
         assert [v["model_id"] for v in versions] == [
             "ltx-2.5-22b-distilled",
+            "ltx-2.5-22b-dev",
             "ltx-2.3-22b-distilled-1.1",
             "ltx-2.3-22b-distilled",
         ]
         newest = versions[0]
-        older = versions[2]
+        older = versions[3]
         assert newest["label"] == "2.5"
         assert newest["installed"] is True
         assert newest["active"] is True

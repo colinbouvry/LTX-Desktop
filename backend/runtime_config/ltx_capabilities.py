@@ -92,6 +92,25 @@ _LOCAL_PIXELS_16_9: dict[LTXVideoGenResolution, tuple[int, int]] = {
     "2160p": (3840, 2112),
 }
 
+# Non-distilled 2.5. Same feature surface as the distilled model minus IC-LoRA, whose
+# adapters are trained against the distilled checkpoint, and minus Retake/Extend, which
+# are separate pipelines. Its own gain -- a real CFG scale and a negative prompt -- is not
+# a capability flag: the distilled pipeline has no parameter for either.
+_LOCAL_2_5_DEV = LocalOfferingCapabilities(
+    t2v=True,
+    i2v=True,
+    a2v=True,
+    ic_lora=False,
+    retake=False,
+    extend=False,
+    multi_keyframe=True,
+    multi_keyframe_max_count=LOCAL_MULTI_KEYFRAME_MAX_COUNT,
+    user_loras=True,
+    camera_motion=True,
+    auto_duration=True,
+    resolution_pixels_16_9=_LOCAL_PIXELS_16_9,
+)
+
 _API_PIXELS_16_9: dict[LTXVideoGenResolution, tuple[int, int]] = {
     "720p": (1280, 720),
     "1080p": (1920, 1080),
@@ -202,6 +221,8 @@ def local_caps(model_id: LTXLocalModelId) -> LocalOfferingCapabilities:
     match model_id:
         case "ltx-2.5-22b-distilled":
             return _LOCAL_2_5
+        case "ltx-2.5-22b-dev":
+            return _LOCAL_2_5_DEV
         case "ltx-2.3-22b-distilled" | "ltx-2.3-22b-distilled-1.1":
             return _LOCAL_2_3
         case _:

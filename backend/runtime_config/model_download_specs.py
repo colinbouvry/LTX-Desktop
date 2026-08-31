@@ -94,6 +94,9 @@ class LTXLocalModelSpec:
     relevance: LTXLocalModelRelevance
     supported_pipelines: tuple[tuple[LTXVideoGenPipeline, LTXVideoGenerationSpec], ...]
     version_label: str
+    # Stage-2 refinement adapter, required by the non-distilled two-stage pipeline and
+    # unused by the distilled one. Downloaded alongside the transformer.
+    stage_2_lora_cp: ModelCheckpointID | None = None
     supports_api_text_encoding: bool = True
     # `/v1/prompt-embedding` `model` selector for published checkpoints that omit
     # `encrypted_wandb_properties` (LTX 2.5 OS split). XOR with checkpoint `model_id`.
@@ -167,6 +170,17 @@ _DISTILLED_PIPELINES_2_3: tuple[tuple[LTXVideoGenPipeline, LTXVideoGenerationSpe
     ),
 )
 
+_DEV_PIPELINES_2_5: tuple[tuple[LTXVideoGenPipeline, LTXVideoGenerationSpec], ...] = (
+    (
+        "fast",
+        LTXVideoGenerationSpec(
+            display_name="LTX 2.5 Pro (local)",
+            supported_resolutions_durations=_FAST_LOCAL_RESOLUTIONS_DURATIONS,
+            a2v_supported_resolutions_durations=_FAST_LOCAL_RESOLUTIONS_DURATIONS,
+        ),
+    ),
+)
+
 _DISTILLED_PIPELINES_2_5: tuple[tuple[LTXVideoGenPipeline, LTXVideoGenerationSpec], ...] = (
     (
         "fast",
@@ -235,6 +249,29 @@ def get_model_cp_spec(cp_id: ModelCheckpointID) -> ModelCheckpointSpec:
                 repo_id="Lightricks/LTX-2.5",
                 description="LTX 2.5 distilled transformer",
                 repo_filename="diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+                gated=True,
+            )
+        case "ltx-2.5-22b-dev":
+            return ModelCheckpointSpec(
+                relative_path=LTX_2_5_FAMILY_DIR / "ltx-2.5-22b-dev-transformer-bf16.safetensors",
+                expected_size_bytes=42_018_190_584,
+                is_folder=False,
+                repo_id="Lightricks/LTX-2.5",
+                description="LTX 2.5 non-distilled transformer",
+                repo_filename="diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors",
+                gated=True,
+            )
+        case "ltx-2.5-22b-distilled-lora":
+            return ModelCheckpointSpec(
+                # Stage-2 refinement adapter for the non-distilled transformer. Stage 1
+                # runs the base model with CFG; stage 2 upsamples and refines with this
+                # on a distilled schedule, which is where the sharpening comes from.
+                relative_path=LTX_2_5_FAMILY_DIR / "ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+                expected_size_bytes=8_899_674_240,
+                is_folder=False,
+                repo_id="Lightricks/LTX-2.5",
+                description="LTX 2.5 stage-2 refinement LoRA",
+                repo_filename="loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
                 gated=True,
             )
         case "ltx-2.5-spatial-upscaler-x2-1.0":
@@ -394,6 +431,27 @@ def get_ltx_model_spec(model_id: LTXLocalModelId) -> LTXLocalModelSpec:
                 wants_audio_visual_captions=True,
                 prompt_enhancer_cp="gemma-4-e2b-it",
                 is_latest=True,
+            )
+        case "ltx-2.5-22b-dev":
+            return LTXLocalModelSpec(
+                model_cp="ltx-2.5-22b-dev",
+                upscale_cp="ltx-2.5-spatial-upscaler-x2-1.0",
+                text_encoder_cp="gemma4-12b-with-proj-ltx-2.5",
+                video_vae_cp="ltx-2.5-video-vae",
+                video_vae_conv_cp="ltx-2.5-video-vae-conv",
+                audio_vae_cp="ltx-2.5-audio-vae",
+                duration_head_cp="ltx-2.5-duration-head",
+                ic_loras_spec=None,
+                stage_2_lora_cp="ltx-2.5-22b-distilled-lora",
+                # Not offered as an upgrade from anything: it is a different trade, not a
+                # newer version. Slower per render, but it takes a CFG scale and a
+                # negative prompt, which the distilled pipeline has no parameter for.
+                relevance=LTXLocalModelRelevant(upgrade_messages={}),
+                supported_pipelines=_DEV_PIPELINES_2_5,
+                version_label="2.5",
+                api_prompt_embedding_model=LTX_2_5_API_PROMPT_EMBEDDING_MODEL,
+                wants_audio_visual_captions=True,
+                prompt_enhancer_cp="gemma-4-e2b-it",
             )
         case "ltx-2.3-22b-distilled-1.1":
             return LTXLocalModelSpec(

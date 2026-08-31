@@ -54,6 +54,7 @@ class PipelinesHandler(StateHandlerBase):
         text_handler: TextHandler,
         gpu_cleaner: GpuCleaner,
         fast_video_pipeline_class: type[FastVideoPipeline],
+        quality_video_pipeline_class: type[FastVideoPipeline],
         image_generation_pipeline_class: type[ImageGenerationPipeline],
         ic_lora_pipeline_class: type[IcLoraPipeline],
         depth_processor_pipeline_class: type[DepthProcessorPipeline],
@@ -66,6 +67,7 @@ class PipelinesHandler(StateHandlerBase):
         self._text_handler = text_handler
         self._gpu_cleaner = gpu_cleaner
         self._fast_video_pipeline_class = fast_video_pipeline_class
+        self._quality_video_pipeline_class = quality_video_pipeline_class
         self._image_generation_pipeline_class = image_generation_pipeline_class
         self._ic_lora_pipeline_class = ic_lora_pipeline_class
         self._depth_processor_pipeline_class = depth_processor_pipeline_class
@@ -161,7 +163,15 @@ class PipelinesHandler(StateHandlerBase):
         model_id = self._require_downloaded_ltx_model_id()
         paths = self._resolve_ltx_paths(model_id, gemma_root)
 
-        pipeline = self._fast_video_pipeline_class.create(
+        # A checkpoint that declares a stage-2 adapter is the non-distilled one, which
+        # needs the two-stage pipeline. Keying off the declared path rather than the model
+        # id keeps this from drifting when another such checkpoint is added.
+        pipeline_class = (
+            self._quality_video_pipeline_class
+            if paths.stage_2_lora_path is not None
+            else self._fast_video_pipeline_class
+        )
+        pipeline = pipeline_class.create(
             paths.checkpoint_path,
             paths.gemma_root,
             paths.upsampler_path,
@@ -171,6 +181,7 @@ class PipelinesHandler(StateHandlerBase):
             video_vae_path=paths.video_vae_path,
             audio_vae_path=paths.audio_vae_path,
             duration_head_path=paths.duration_head_path,
+            stage_2_lora_path=paths.stage_2_lora_path,
         )
 
         state = VideoPipelineState(

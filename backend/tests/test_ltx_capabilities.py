@@ -142,11 +142,19 @@ def test_pixels_for_unknown_resolution_raises():
         pixels_for(api_caps("fast"), "540p", "16:9")
 
 
-def test_ic_lora_flag_is_on_for_every_local_model():
+def test_ic_lora_flag_is_on_for_every_distilled_local_model():
+    """IC-LoRA adapters are trained against the distilled checkpoints.
+
+    The non-distilled model is excluded on purpose rather than optimistically: the
+    adapters would load (same architecture) but were fitted to distilled behaviour, and
+    an adapter that runs while behaving wrongly wastes a render without saying why.
+    Flip this on once a run proves it out.
+    """
     from runtime_config.model_download_specs import ALL_LTX_LOCAL_MODEL_IDS
 
     for model_id in ALL_LTX_LOCAL_MODEL_IDS:
-        assert supports(local_caps(model_id), "ic_lora") is True
+        expected = model_id != "ltx-2.5-22b-dev"
+        assert supports(local_caps(model_id), "ic_lora") is expected
 
 
 @pytest.mark.parametrize("pipeline", ["fast", "fast-2.5", "pro", "pro-2.5"])
@@ -154,3 +162,41 @@ def test_multi_keyframe_is_off_for_every_api_pipeline(pipeline):
     caps = api_caps(pipeline)
     assert supports(caps, "multi_keyframe") is False
     assert caps.multi_keyframe_max_count == 0
+
+
+class TestNonDistilledPipelineSelection:
+    """The two local 2.5 checkpoints need different pipelines.
+
+    Selection keys off the declared stage-2 adapter rather than the model id, so these
+    assert the path reaches the pipeline rather than that a branch was taken.
+    """
+
+    def test_distilled_model_gets_no_stage_2_adapter(
+        self, client, test_state, fake_services, create_fake_model_files
+    ):
+        create_fake_model_files(model_id="ltx-2.5-22b-distilled")
+        test_state.state.app_settings.active_ltx_model_id = "ltx-2.5-22b-distilled"
+
+        response = client.post(
+            "/api/generate",
+            json={"prompt": "a buoy", "resolution": "540p", "model": "fast", "duration": 2, "fps": 24},
+        )
+
+        assert response.status_code == 200
+        assert fake_services.fast_video_pipeline.create_stage_2_lora_paths[-1] is None
+
+    def test_non_distilled_model_receives_its_stage_2_adapter(
+        self, client, test_state, fake_services, create_fake_model_files
+    ):
+        create_fake_model_files(model_id="ltx-2.5-22b-dev")
+        test_state.state.app_settings.active_ltx_model_id = "ltx-2.5-22b-dev"
+
+        response = client.post(
+            "/api/generate",
+            json={"prompt": "a buoy", "resolution": "540p", "model": "fast", "duration": 2, "fps": 24},
+        )
+
+        assert response.status_code == 200
+        adapter = fake_services.fast_video_pipeline.create_stage_2_lora_paths[-1]
+        assert adapter is not None
+        assert adapter.endswith("ltx-2.5-22b-distilled-lora-450-bf16.safetensors")
