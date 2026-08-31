@@ -55,3 +55,31 @@ AudioPath = Annotated[
         )
     ),
 ]
+
+
+# CrossView accepts only these phrasings; anything else silently degrades the result.
+# Enumerating them means the caller cannot get the wording wrong.
+Azimuth = Literal[
+    "same angle",
+    "slightly to the left",
+    "slightly to the right",
+    "to the left",
+    "to the right",
+    "far to the left",
+    "far to the right",
+]
+Elevation = Literal["lower", "same height", "higher"]
+Distance = Literal["closer", "same distance", "further"]
+
+LoraStrength = Annotated[
+    float,
+    Field(
+        description=(
+            "Adapter weight. The backend rejects anything above 2.0. The catalogue "
+            "default of 1.5 preserves the scene well but moves the camera only "
+            "slightly; raise it when the requested angle barely lands."
+        ),
+        ge=0.0,
+        le=2.0,
+    ),
+]

@@ -18,12 +18,16 @@ from mcp.types import ToolAnnotations
 from . import client, media
 from .models import (
     AspectRatio,
+    Azimuth,
     AudioPath,
     DurationSeconds,
     Fps,
+    LoraStrength,
     ImagePath,
     NegativePrompt,
     Prompt,
+    Distance,
+    Elevation,
     Resolution,
     ResponseFormat,
     Seed,
@@ -474,6 +478,93 @@ async def ltx_extract_last_frame(video_path: str, out_dir: str | None = None) ->
     except media.MediaError as exc:
         raise client.BackendError(str(exc)) from exc
     return f"Final frame: {path}\n\nPass it as image_path to continue the shot."
+
+
+@mcp.tool(
+    name="ltx_crossview",
+    title="Re-shoot a clip from another camera angle",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
+async def ltx_crossview(
+    video_path: str,
+    azimuth: Azimuth = "to the right",
+    elevation: Elevation = "same height",
+    distance: Distance = "same distance",
+    lora_strength: LoraStrength = 1.5,
+) -> str:
+    """Re-render an existing clip from a different viewpoint, keeping the same action.
+
+    A virtual second camera: the subject, staging and moment stay put while the camera
+    moves. Run it several times on one reference clip with different angles to build a
+    multicam set of the same take, then cut between them.
+
+    Unlike chaining, this does not advance time -- every angle covers the same moment,
+    which is what makes the results intercuttable.
+
+    Needs the "crossview-prompt" IC-LoRA downloaded (Settings > Browse IC-LoRAs).
+
+    Args:
+        video_path: Absolute path to the reference clip to re-shoot.
+        azimuth: Horizontal move of the camera.
+        elevation: Vertical move of the camera.
+        distance: Whether the camera moves in or out.
+        lora_strength: Adapter weight. 1.5 is the catalogue default; lower it if the
+            re-render drifts from the reference, raise it if the angle barely changes.
+
+    Returns:
+        Confirmation that the render started, with the angle in effect.
+    """
+    global _active
+
+    if _active is not None and not _active.task.done():
+        return (
+            "A generation started by this server is still running. Poll "
+            "ltx_generation_progress, or call ltx_cancel_generation to stop it."
+        )
+    if await _backend_is_busy():
+        return "The backend is already generating. It has one GPU slot; wait or cancel."
+
+    # The adapter was trained on this exact phrasing; any paraphrase weakens it.
+    prompt = f"crossview. new camera angle: {azimuth}, {elevation}, {distance}."
+
+    body: dict[str, Any] = {
+        "conditioning_type": "custom",
+        "ic_lora_id": "crossview-prompt",
+        # The handler reads input_path for the driving clip; video_path is a different
+        # field and leaving this unset fails with "Input not found: None".
+        "input_path": video_path,
+        "prompt": prompt,
+        "lora_strength": lora_strength,
+        "skip_stage_2": True,
+        # 0 is a sentinel meaning "source dimensions", not "no scaling". Multicam angles
+        # are only intercuttable if every camera matches the reference, and the
+        # catalogue's own 1.5 takes the 768-bucket branch instead: a 1024x576 reference
+        # came back 576x256, a different size and a different aspect ratio.
+        "resolution_factor": 0,
+        "audio_mode": "source",
+    }
+
+    task = asyncio.create_task(
+        client.request("POST", "/api/ic-lora/generate", json_body=body, long_running=True)
+    )
+    _active = _ActiveGeneration(task=task, summary={"prompt": prompt})
+
+    return _render(
+        {
+            "reference": video_path,
+            "angle": f"{azimuth}, {elevation}, {distance}",
+            "prompt": prompt,
+            "started": True,
+            "next_step": "Poll ltx_generation_progress.",
+        },
+        "markdown",
+        "CrossView started",
+    )
 
 
 def main() -> None:
