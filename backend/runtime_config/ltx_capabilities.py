@@ -7,6 +7,8 @@ offering; its flags are independent of the API Fast rows.
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, replace
 from typing import Literal, assert_never
 
@@ -29,7 +31,22 @@ LtxCapabilityFeature = Literal[
     "camera_motion",
     "auto_duration",
 ]
-LtxAspectRatio = Literal["16:9", "9:16"]
+LtxAspectRatio = Literal["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "32:9"]
+
+# w:h numerators used by pixels_for() to rescale a resolution's pixel budget.
+# Ratios other than 16:9/9:16 are LOCAL-ONLY: the API path rejects them via
+# FORCED_API_ALLOWED_ASPECT_RATIOS in video_generation_handler.py.
+_ASPECT_NUMERATORS: dict[LtxAspectRatio, tuple[int, int]] = {
+    "16:9": (16, 9),
+    "9:16": (9, 16),
+    "1:1": (1, 1),
+    "4:3": (4, 3),
+    "3:4": (3, 4),
+    "21:9": (21, 9),
+    # Super-ultrawide (dual 16:9). Extreme box: at 1080p budget this is
+    # 2752x768, so vertical detail is genuinely low -- framing matters.
+    "32:9": (32, 9),
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +85,11 @@ _LOCAL_PIXELS_16_9: dict[LTXVideoGenResolution, tuple[int, int]] = {
     "540p": (1024, 576),
     "720p": (1280, 704),
     "1080p": (1920, 1088),
+    # Unlocked locally. Heights snap DOWN to the /64 two-stage grid that
+    # assert_resolution() enforces (1440 -> 1408, 2160 -> 2112), same reason
+    # 1080p is 1088 and not 1080. VRAM-heavy: see notes in the PR/commit.
+    "1440p": (2560, 1408),
+    "2160p": (3840, 2112),
 }
 
 _API_PIXELS_16_9: dict[LTXVideoGenResolution, tuple[int, int]] = {
@@ -241,6 +263,18 @@ def supports(caps: LtxOfferingCapabilities, feature: LtxCapabilityFeature) -> bo
             assert_never(feature)
 
 
+_GRID = 64
+
+
+def _snap_to_grid(value: float) -> int:
+    """Round to the nearest multiple of 64, never below one grid cell.
+
+    assert_resolution() in ltx_pipelines rejects anything not divisible by 64 on
+    the two-stage pipeline, so this is a hard requirement, not a preference.
+    """
+    return max(_GRID, round(value / _GRID) * _GRID)
+
+
 def pixels_for(
     caps: LtxOfferingCapabilities,
     resolution: LTXVideoGenResolution,
@@ -250,6 +284,17 @@ def pixels_for(
     if size is None:
         raise KeyError(resolution)
     width, height = size
+    if aspect == "16:9":
+        return width, height
     if aspect == "9:16":
         return height, width
-    return width, height
+    # Other ratios reuse the label's pixel budget so token count -- and therefore
+    # VRAM -- stays comparable to 16:9, then snap to the /64 two-stage grid.
+    ratio_w, ratio_h = _ASPECT_NUMERATORS[aspect]
+    ratio = ratio_w / ratio_h
+    # Snap the height first, then derive width FROM the snapped height. Rounding
+    # both axes independently lets the errors compound in opposite directions
+    # (540p 32:9 landed on 1472x384 = 3.83 against a 3.56 target); anchoring on
+    # one axis keeps the delivered ratio within ~2% of the request.
+    snapped_height = _snap_to_grid(math.sqrt((width * height) / ratio))
+    return _snap_to_grid(snapped_height * ratio), snapped_height

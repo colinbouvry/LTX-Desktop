@@ -383,8 +383,16 @@ class LtxInsufficientFundsErrorResponse(BaseModel):
 
 
 LTXVideoGenResolution: TypeAlias = Literal["540p", "720p", "1080p", "1440p", "2160p"]
-LTXVideoGenDuration: TypeAlias = Literal[2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20]
-LTXVideoGenFps: TypeAlias = Literal[24, 25, 48, 50]
+# 25/30/40 are local-only additions. The API envelope in api_model_specs.py
+# does not list them, so validate_generate_video_request() still rejects them
+# on the cloud path. Upstream seconds_to_clamped_num_frames() caps auto
+# duration at max_frames=1024 (~42s @ 24fps), so 40 stays inside that.
+LTXVideoGenDuration: TypeAlias = Literal[
+    2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 40
+]
+# 30/60 are local-only additions (cinema/broadcast rates the API does not list,
+# so validate_generate_video_request() still rejects them on the cloud path).
+LTXVideoGenFps: TypeAlias = Literal[24, 25, 30, 48, 50, 60]
 LTXVideoGenPipeline: TypeAlias = Literal["fast", "pro", "fast-2.5", "pro-2.5"]
 
 
@@ -475,7 +483,7 @@ class GenerateVideoRequest(BaseModel):
     lastImagePath: str | None = None
     keyframes: list[KeyframeInput] = Field(default_factory=list[KeyframeInput])
     audioPath: str | None = None
-    aspectRatio: Literal["16:9", "9:16"] = "16:9"
+    aspectRatio: Literal["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "32:9"] = "16:9"
     seed: int | None = None
     loras: list[LoraEntry] = Field(default_factory=list[LoraEntry])
 

@@ -1093,7 +1093,7 @@ export interface components {
              * @default 16:9
              * @enum {string}
              */
-            aspectRatio: "16:9" | "9:16";
+            aspectRatio: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "32:9";
             /**
              * Audio
              * @default false
@@ -1111,13 +1111,13 @@ export interface components {
              * Duration
              * @default 5
              */
-            duration: (2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 14 | 16 | 18 | 20) | null;
+            duration: (2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 14 | 16 | 18 | 20 | 25 | 30 | 40) | null;
             /**
              * Fps
              * @default 24
              * @enum {integer}
              */
-            fps: 24 | 25 | 48 | 50;
+            fps: 24 | 25 | 30 | 48 | 50 | 60;
             /** Imagepath */
             imagePath?: string | null;
             /** Keyframes */
@@ -1660,7 +1660,7 @@ export interface components {
         LTXVideoGenerationResolutionSpec: {
             /** Fps To Durations */
             fps_to_durations: {
-                [key: string]: (2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 14 | 16 | 18 | 20)[];
+                [key: string]: (2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 14 | 16 | 18 | 20 | 25 | 30 | 40)[];
             };
         };
         /** LTXVideoGenerationSpec */

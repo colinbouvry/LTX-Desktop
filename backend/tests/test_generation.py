@@ -167,7 +167,8 @@ class TestGenerate:
 
         assert r.status_code == 200
         call = fake_services.fast_video_pipeline.generate_calls[0]
-        assert call["num_frames"] == AutoDurationSpec(min_seconds=5, max_seconds=20)
+        # Auto duration spans the unlocked local envelope (2..40s at 540p).
+        assert call["num_frames"] == AutoDurationSpec(min_seconds=2, max_seconds=40)
 
     def test_t2v_auto_duration_rejected_on_2_3(
         self, client, test_state, create_fake_model_files
@@ -1840,7 +1841,10 @@ class TestForcedApiGenerate:
             },
         )
 
-        assert r.status_code == 422
+        # 4:3 is a valid Literal now that local generation offers it, so the
+        # rejection moved from Pydantic (422) to the forced-API guard
+        # (400 INVALID_FORCED_API_ASPECT_RATIO). The cloud path stays 16:9/9:16.
+        assert r.status_code == 400
 
     def test_extended_durations_for_fast_1080p_24fps(self, client, test_state, fake_services):
         test_state.config.local_generations_mode = "unsupported"
@@ -2221,7 +2225,15 @@ class TestGenerateModelSpecs:
         data = r.json()
         assert [item["pipeline"] for item in data["local_models"]] == ["fast"]
         assert data["local_models"][0]["spec"]["display_name"] == "LTX 2.5 Fast"
-        assert list(data["local_models"][0]["spec"]["supported_resolutions_durations"]["540p"]["fps_to_durations"].keys()) == ["24"]
+        # Local envelope is unlocked: every resolution exposes every fps.
+        local_res_durations = data["local_models"][0]["spec"]["supported_resolutions_durations"]
+        assert sorted(local_res_durations.keys()) == ["1080p", "1440p", "2160p", "540p", "720p"]
+        assert list(local_res_durations["540p"]["fps_to_durations"].keys()) == [
+            "24", "25", "30", "48", "50", "60",
+        ]
+        assert local_res_durations["1080p"]["fps_to_durations"]["24"] == [
+            2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 40,
+        ]
         assert [item["pipeline"] for item in data["api_models"]] == ["fast", "pro", "fast-2.5", "pro-2.5"]
         assert data["api_models"][0]["spec"]["supported_resolutions_durations"]["1080p"]["fps_to_durations"]["24"] == [
             2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20,

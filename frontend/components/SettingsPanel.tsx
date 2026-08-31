@@ -230,6 +230,13 @@ export function SettingsPanel({
       >
         <option value="16:9">16:9 Landscape</option>
         <option value="9:16">9:16 Portrait</option>
+        {/* Local-only ratios: the API path rejects anything outside 16:9/9:16
+            (FORCED_API_ALLOWED_ASPECT_RATIOS in video_generation_handler.py). */}
+        <option value="32:9">32:9 Super ultrawide (local)</option>
+        <option value="21:9">21:9 Cinemascope (local)</option>
+        <option value="4:3">4:3 Classic (local)</option>
+        <option value="3:4">3:4 Portrait (local)</option>
+        <option value="1:1">1:1 Square (local)</option>
       </Select>
 
       {/* Audio and Camera Motion Row */}

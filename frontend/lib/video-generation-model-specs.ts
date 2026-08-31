@@ -232,6 +232,19 @@ export function resolveVideoGenerationOptions<T extends VideoGenerationSettingsS
   }
 }
 
+// Every ratio the backend accepts (LtxAspectRatio in ltx_capabilities.py). This
+// used to collapse anything but 9:16 down to 16:9, which silently discarded the
+// user's choice once local generation started offering more ratios.
+const VIDEO_ASPECT_RATIOS: readonly string[] = [
+  '16:9', '21:9', '32:9', '9:16', '4:3', '3:4', '1:1',
+]
+
+function toVideoAspectRatio(value: string | undefined): VideoGenerationAspectRatio {
+  return VIDEO_ASPECT_RATIOS.includes(value ?? '')
+    ? (value as VideoGenerationAspectRatio)
+    : '16:9'
+}
+
 export function sanitizeVideoGenerationSettings<T extends VideoGenerationSettingsShape>(
   settings: T,
   modelSpecs: VideoGenerationModelSpecItem[],
@@ -264,7 +277,7 @@ export function sanitizeVideoGenerationSettings<T extends VideoGenerationSetting
     videoResolution: resolved.selectedResolution,
     fps: resolved.selectedFps,
     duration: resolved.selectedDuration,
-    aspectRatio: (settings.aspectRatio === '9:16' ? '9:16' : '16:9') as VideoGenerationAspectRatio,
+    aspectRatio: toVideoAspectRatio(settings.aspectRatio),
   }
 }
 

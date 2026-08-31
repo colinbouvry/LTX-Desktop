@@ -131,22 +131,28 @@ DEPTH_PROCESSOR_CP_ID: ModelCheckpointID = "dpt-hybrid-midas"
 PERSON_DETECTOR_CP_ID: ModelCheckpointID = "yolox-l-torchscript"
 POSE_PROCESSOR_CP_ID: ModelCheckpointID = "dw-ll-ucoco-384-bs5"
 
+# Unlocked local envelope: every resolution offers every fps/duration the types
+# allow. Structurally this is always valid -- snap_frames_to_grid() rounds any
+# frame count onto the causal VAE temporal grid, and pixels_for() snaps every
+# resolution onto the /64 two-stage grid.
+#
+# The real ceiling is VRAM, not the model, and it is NOT enforced here: attention
+# cost grows with pixels x frames, so high resolution combined with long duration
+# will OOM long before the app complains. Treat the far end of this table as
+# "selectable", not "supported".
+_ALL_LOCAL_RESOLUTIONS: tuple[LTXVideoGenResolution, ...] = (
+    "540p", "720p", "1080p", "1440p", "2160p",
+)
+_ALL_LOCAL_FPS: tuple[LTXVideoGenFps, ...] = (24, 25, 30, 48, 50, 60)
+_ALL_LOCAL_DURATIONS: tuple[LTXVideoGenDuration, ...] = (
+    2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 40,
+)
+
 _FAST_LOCAL_RESOLUTIONS_DURATIONS: dict[LTXVideoGenResolution, LTXVideoGenerationResolutionSpec] = {
-    "540p": _local_resolution_spec(
-        fps_to_durations={
-            24: (5, 6, 8, 10, 20),
-        },
-    ),
-    "720p": _local_resolution_spec(
-        fps_to_durations={
-            24: (5, 6, 8, 10),
-        },
-    ),
-    "1080p": _local_resolution_spec(
-        fps_to_durations={
-            24: (5,),
-        },
-    ),
+    resolution: _local_resolution_spec(
+        fps_to_durations={fps: _ALL_LOCAL_DURATIONS for fps in _ALL_LOCAL_FPS},
+    )
+    for resolution in _ALL_LOCAL_RESOLUTIONS
 }
 
 _DISTILLED_PIPELINES_2_3: tuple[tuple[LTXVideoGenPipeline, LTXVideoGenerationSpec], ...] = (
