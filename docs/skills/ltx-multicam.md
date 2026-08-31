@@ -71,14 +71,20 @@ angles is three renders.
 
 ## Choosing a set
 
-Give the cameras real separation, or the cut will not read. A serviceable three-camera
-set from one master:
+Give the cameras real separation, or the cut will not read. Measured on one market
+master, at strength 2.0:
 
-| Camera | Angle |
+| Angle | Result |
 | --- | --- |
-| 2 | `far to the right`, `lower`, `closer` |
-| 3 | `far to the left`, `higher`, `same distance` |
-| 4 | `same angle`, `same height`, `closer` — a punch-in on the master |
+| `far to the left`, `higher`, `same distance` | **Best of the set.** A true high angle — the top of the awning visible, cobblestones filling the lower frame. Unmistakably another camera. |
+| `far to the right`, `lower`, `closer` | Works. Viewpoint shifted, foreground traffic changed, street perspective rotated. |
+| `same angle`, `same height`, `closer` | **Failed.** Came back near-identical to the master, if anything slightly wider. |
 
-Neighbouring choices (`slightly to the left` against `same angle`) produce angles too
-close to cut between. Reach for the `far` variants first.
+**`distance` does almost nothing on its own.** Do not plan a punch-in with it — crop the
+master, or generate a closer shot outright. The axes that actually relocate the camera
+are `azimuth` and `elevation`, and they need the `far` and `higher`/`lower` ends of their
+range. Neighbouring choices (`slightly to the left` against `same angle`) return frames
+too close to cut between.
+
+So a working set is two or three angles built from azimuth and elevation, not four built
+by walking all three axes.
