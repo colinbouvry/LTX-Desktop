@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Film } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { useView } from '../contexts/ViewContext'
 import { LtxLogo } from '../components/LtxLogo'
-import { OutputsGalleryModal } from '../components/OutputsGalleryModal'
-import { addVisualAssetToProject } from '../lib/asset-copy'
 import { Button } from '../components/ui/button'
 import { pathToFileUrl } from '../lib/file-url'
-import type { GenerationParams, Project } from '../types/project-model'
+import type { Project } from '../types/project-model'
 import { useProjectReferencesMigration } from '../hooks/useProjectReferencesMigration'
 
 function formatDate(timestamp: number): string {
@@ -125,14 +123,13 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 }
 
 export function Home() {
-  const { projectIds, getProject, createProject, deleteProject, renameProject, addAsset } = useProjects()
+  const { projectIds, getProject, createProject, deleteProject, renameProject } = useProjects()
   const { openProject } = useView()
   const { migrationStatus, migrateProjects } = useProjectReferencesMigration()
   const [isCreating, setIsCreating] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [showOutputsGallery, setShowOutputsGallery] = useState(false)
   const migrationStartedRef = useRef(false)
 
   useEffect(() => {
@@ -193,49 +190,6 @@ export function Home() {
   
   return (
     <div className="h-screen bg-background flex">
-      {showOutputsGallery && (
-        <OutputsGalleryModal
-          onClose={() => setShowOutputsGallery(false)}
-          projects={projects.map(p => ({ id: p.id, name: p.name }))}
-          onImport={async (item, projectId) => {
-            // Copy into project storage first: assets must not point at the outputs
-            // folder, which the user is free to clear.
-            const copied = await addVisualAssetToProject(item.path, projectId, 'video')
-            if (!copied) throw new Error('Could not copy the file into project storage')
-            const recorded = item.generation_params
-            addAsset(projectId, {
-              type: 'video',
-              path: copied.path,
-              bigThumbnailPath: copied.bigThumbnailPath,
-              smallThumbnailPath: copied.smallThumbnailPath,
-              width: copied.width,
-              height: copied.height,
-              prompt: recorded?.prompt ?? '',
-              resolution: recorded?.resolution
-                ?? (copied.width && copied.height ? `${copied.width}x${copied.height}` : ''),
-              duration: recorded?.duration ?? undefined,
-              // The gallery in GenSpace shows only assets carrying generationParams, so a
-              // render started outside the app appears there only when the backend
-              // recorded its provenance. Files dropped in by hand have none, and stay
-              // editor-only rather than being given invented settings.
-              generationParams: recorded
-                ? {
-                    mode: recorded.mode as GenerationParams['mode'],
-                    prompt: recorded.prompt,
-                    model: recorded.model,
-                    modelLabel: recorded.model_label ?? undefined,
-                    duration: recorded.duration ?? null,
-                    resolution: recorded.resolution,
-                    fps: recorded.fps,
-                    audio: recorded.audio,
-                    cameraMotion: recorded.camera_motion,
-                  }
-                : undefined,
-            })
-            openProject(projectId)
-          }}
-        />
-      )}
       {/* Sidebar */}
       <aside className="w-64 border-r border-zinc-800 flex flex-col">
         <div className="p-6">
@@ -246,14 +200,6 @@ export function Home() {
           <button className="w-full px-3 py-2 rounded-lg bg-zinc-800 text-white text-left text-sm font-medium flex items-center gap-2">
             <Folder className="h-4 w-4" />
             Home
-          </button>
-
-          <button
-            onClick={() => setShowOutputsGallery(true)}
-            className="mt-1 w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
-          >
-            <Film className="h-4 w-4" />
-            Generated files
           </button>
           
           {projects.length > 0 && (
