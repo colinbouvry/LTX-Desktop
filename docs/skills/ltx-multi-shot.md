@@ -56,6 +56,13 @@ shot, or drop to two shots.
 
 Same place, three scales, identifiers repeated at each cut.
 
+**Decor holds better than wardrobe.** In a measured run, a distinctive object — an oil
+lamp with a particular brass pedestal — stayed recognisably itself across all three
+shots, as did the windows, table grain and light. The character's knit cardigan, named
+identically at each cut, still read as a coat in the wide shot. Anchor a scene on a
+*prop* and a *light source*; treat clothing as the first thing that will drift, and give
+it more distinctive cues than a colour and a fabric.
+
 ## 2. Harvesting the shots
 
 ```
@@ -67,11 +74,28 @@ cut. The opening frame is always included — nothing precedes it, so detection 
 would drop the first shot.
 
 Only **hard cuts** are found. Dissolves score below the threshold and are skipped, which
-is deliberate: a dissolve has no single representative frame. If a gentle camera move is
-being split into false shots, raise `scene_threshold`; if a real cut is missed, lower it.
+is deliberate: a dissolve has no single representative frame.
 
-Fewer stills than shots you wrote usually means the model merged beats — lengthen the
-render rather than lowering the threshold, which mostly buys false positives.
+### Holding one decor makes cuts hard to detect
+
+This is the trap, and it follows directly from doing the job well. Scene detection scores
+how much consecutive frames differ. Repeat the same room, the same lamp, the same
+lighting at every cut — exactly what shot-to-shot consistency requires — and the cuts
+become *quiet*: real edits that barely move the score.
+
+Measured: a three-shot cabin render, same oil lamp and frost-rimmed windows throughout,
+produced **zero** cuts at the 0.4 default. The cuts were there at 3.75s and 7.50s — near
+perfect thirds of a 10s clip — but scored under 0.2. At 0.15 all three shots came back,
+and the count held at two cuts all the way down to 0.05, so there were no false positives
+to fear.
+
+A null result at the default therefore says nothing on its own. `ltx_extract_shots`
+probes lower thresholds and reports what it finds; re-run with the lowest threshold that
+gives the number of shots you actually wrote. Start near **0.15 for single-decor
+sequences**, and keep 0.4 for scenes that change location.
+
+If lowering finds nothing either, the model really did merge the beats — lengthen the
+render instead.
 
 ## 3. Growing a shot into a long take
 

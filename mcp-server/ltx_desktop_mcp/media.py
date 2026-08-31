@@ -17,6 +17,12 @@ from pathlib import Path
 # has no single representative frame.
 DEFAULT_SCENE_THRESHOLD = 0.4
 
+# Floor for probing. A multi-shot render that deliberately holds one decor scores far
+# below the default -- a measured three-shot cabin render put its cuts under 0.2 -- so
+# finding nothing at 0.4 says little on its own.
+MIN_PROBE_THRESHOLD = 0.1
+_PROBE_STEPS = (0.3, 0.2, 0.15, MIN_PROBE_THRESHOLD)
+
 _PTS_TIME = re.compile(r"pts_time:([0-9.]+)")
 
 
@@ -126,3 +132,19 @@ def extract_last_frame(video_path: str, *, out_dir: str | None = None) -> str:
     if result.returncode != 0 or not destination.is_file():
         raise MediaError(f"ffmpeg could not extract the last frame: {result.stderr[:300]}")
     return str(destination)
+
+
+def probe_thresholds(video_path: str, below: float) -> list[tuple[float, int]]:
+    """Cut counts at thresholds under ``below``, to tell a quiet cut from no cut at all.
+
+    Returns only thresholds that find something, lowest count first, so the caller can
+    pick the least permissive one that still recovers the shots.
+    """
+    found: list[tuple[float, int]] = []
+    for threshold in _PROBE_STEPS:
+        if threshold >= below:
+            continue
+        count = len(detect_cut_times(video_path, threshold))
+        if count:
+            found.append((threshold, count))
+    return found

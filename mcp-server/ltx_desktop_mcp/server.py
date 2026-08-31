@@ -424,10 +424,21 @@ async def ltx_extract_shots(
         raise client.BackendError(str(exc)) from exc
 
     if len(shots) == 1:
+        # A multi-shot render that holds one decor across its cuts scores low, because
+        # consecutive shots genuinely look alike. Probing says whether the cuts are
+        # there at all, instead of leaving a dead end at the default threshold.
+        probed = await asyncio.to_thread(media.probe_thresholds, video_path, scene_threshold)
+        if probed:
+            found = ", ".join(f"{t} -> {n} cut(s)" for t, n in probed)
+            return (
+                f"No cut above {scene_threshold}, but lower thresholds find some: {found}.\n\n"
+                "Shots that share a decor score low by design. Re-run with the lowest "
+                "threshold that still gives the number of shots you wrote."
+            )
         return (
-            f"One shot only (no cut above {scene_threshold}). Opening frame: "
-            f"{shots[0]['path']}\n\n"
-            "If the video does contain cuts, lower scene_threshold."
+            f"One shot only (no cut found down to {media.MIN_PROBE_THRESHOLD}). Opening "
+            f"frame: {shots[0]['path']}\n\n"
+            "The render is a single continuous take."
         )
     lines = [f"{len(shots)} shots:"]
     lines.extend(f"- shot {s['shot']} at {s['time_seconds']}s -> {s['path']}" for s in shots)
