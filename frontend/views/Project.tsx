@@ -11,6 +11,7 @@ import {
   hasVisualAssetMetadataForMigration,
   runVisualAssetMetadataMigration,
 } from '../lib/project-asset-metadata-migration'
+import { useExternalGenerations } from '../hooks/use-external-generations'
 
 export function Project() {
   const {
@@ -28,6 +29,10 @@ export function Project() {
   const [assetMetadataMigrationProgress, setAssetMetadataMigrationProgress] = useState({ running: false, total: 0, completed: 0 })
   const [upgradePassProjectId, setUpgradePassProjectId] = useState<string | null>(null)
   const activeProjectId = activeProject?.id ?? null
+
+  // Renders started outside this window (MCP server, scripts) land in the shared outputs
+  // folder but never in the project, which lives in this renderer's localStorage.
+  useExternalGenerations(activeProjectId)
   const activeProjectAssets = activeProject?.assets ?? null
   const needsAssetMetadataMigration = activeProjectAssets
     ? hasVisualAssetMetadataForMigration(activeProjectAssets)
