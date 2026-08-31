@@ -9,7 +9,7 @@ from server_utils.win_dll_search import remove_cwd_from_dll_search_path
 remove_cwd_from_dll_search_path()
 
 faulthandler.enable(file=sys.stderr, all_threads=True)
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 if os.environ.get("BACKEND_DEBUG") == "1":
     try:
@@ -267,6 +267,25 @@ def _resolve_local_generations_mode() -> LocalGenerationMode:
         ram_gb=available_ram_gb,
         fp8_capable=fp8_capable,
     )
+    # Escape hatch for the VRAM-derived tier. The >=31GB threshold puts a 32GB card in
+    # full-resident, where the ~23GB fp8 transformer leaves under ~9GB for activations --
+    # enough for the stock 5s/1080p ceiling, not for longer or higher-resolution clips,
+    # where WDDM silently spills to host RAM and inference collapses (~100x slower) rather
+    # than raising OOM. Forcing "streaming_models_loading" hands those ~23GB back to
+    # activations at the cost of PCIe weight transfer (OffloadMode.CPU, pinned host RAM).
+    mode_override = os.environ.get("LTX_LOCAL_MODE", "").strip()
+    if mode_override:
+        valid_modes = get_args(LocalGenerationMode)
+        if mode_override in valid_modes:
+            logger.info(
+                "Runtime policy OVERRIDE via LTX_LOCAL_MODE: %s -> %s", mode, mode_override
+            )
+            mode = cast(LocalGenerationMode, mode_override)
+        else:
+            logger.warning(
+                "Ignoring LTX_LOCAL_MODE=%r; expected one of %s", mode_override, valid_modes
+            )
+
     logger.info(
         "Runtime policy local_generations_mode=%s (system=%s cuda_available=%s mps_available=%s "
         "vram_gb=%s available_ram_gb=%s fp8_capable=%s)",
