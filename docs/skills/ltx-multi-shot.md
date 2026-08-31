@@ -122,8 +122,21 @@ ltx_extract_last_frame(video_path="…") -> still
 ltx_generate_video(image_path=that_still, …)
 ```
 
-**Expect drift.** Each hand-off re-encodes through the model; colour and sharpness
-degrade, usually visibly by the third or fourth link. Two practical answers:
+**The seam is clean; the drift is inside the link.** Measured on a two-link cabin
+sequence: the first frame of link 2 was essentially indistinguishable from the last frame
+of link 1 — same lamp, same posture, same light. Image-to-video honours its input frame
+closely, so the join itself is invisible.
+
+What degrades is object integrity *within* the continuation. By the end of the second
+link the oil lamp had changed shape — its tall glass chimney replaced by a squat one —
+and the clock face had smeared into two. The continuation prompt named both objects
+explicitly and that did not hold them. A single still carries no memory of the motion or
+the geometry that preceded it, so the model reinvents whatever it cannot infer from one
+frame.
+
+Plan for that: it shows by the **second** link, not the third or fourth. Prefer shorter
+links, and re-describe the anchor objects in physical detail rather than by name. Two
+better answers when object identity actually matters:
 
 - **Switch to LTX 2.3**, which has native Extend and Retake, if the seam quality matters
   more than 2.5's image quality. Both checkpoints may already be on disk.
