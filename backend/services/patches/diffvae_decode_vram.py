@@ -45,8 +45,29 @@ _CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES = 8 * 1024**3
 _orig_video_decoder_call = VideoDecoder.__call__
 
 
-def _cuda_tile_budget_bytes(measured: int) -> int:
-    return min(max(int(measured), 0), _CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES)
+# Stage-4 input features are channels-last ``(T, H/8, W/8, C)`` and stay resident for
+# the whole tiled decode, so upstream subtracts them from the budget before any tile is
+# considered: ``usable = free - model - safety - stage4_feature_bytes``. With the 2.5
+# VAE (C=256, bf16) that is 8 bytes per pixel-frame; the margin covers NATTEN's trailing
+# temporal pad (a 1080p/10s decode measured 5_247_467_520 B for 297 frames = 314 padded).
+_STAGE4_BYTES_PER_PIXEL_FRAME = 8
+_STAGE4_PAD_MARGIN = 1.15
+
+
+def _cuda_tile_budget_bytes(measured: int, pixel_volume: int) -> int:
+    """Cap the DiffVAE budget so the *tile* working set stays at the validated size.
+
+    The flat 8 GiB cap was calibrated at 540p/5s, where stage-4 features are ~0.5 GiB
+    and ~6 GiB is left for tiles. Those features scale with pixel volume while the cap
+    did not, so by 1080p/10s they take 4.9 GiB of the 8 and leave ~1.1 GiB -- too little
+    for any tile, and decode fails outright. Adding the resident cost to the cap holds
+    the tile budget at ~6 GiB at every resolution instead of letting it shrink, which
+    keeps the full-frame tile this cap exists to prevent just as far out of reach.
+    ``measured`` still bounds the result.
+    """
+    resident = int(pixel_volume * _STAGE4_BYTES_PER_PIXEL_FRAME * _STAGE4_PAD_MARGIN)
+    cap = _CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES + resident
+    return min(max(int(measured), 0), cap)
 
 
 def _release_denoise_weights() -> None:
@@ -93,7 +114,7 @@ def _with_post_evict_cuda_tiling(
 
     height, width, num_frames = _pixel_shape_from_latent(latent)
     measured = int(cuda_activation_budget_bytes(device))
-    budget = _cuda_tile_budget_bytes(measured)
+    budget = _cuda_tile_budget_bytes(measured, height * width * num_frames)
     recommend_kwargs: dict[str, Any] = {
         "height": height,
         "width": width,

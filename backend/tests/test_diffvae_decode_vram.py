@@ -113,9 +113,30 @@ def test_cuda_diffvae_reresolves_tiling_after_evict(monkeypatch) -> None:
     assert rec["device"] == decoder._device
 
 
+_VOLUME_540P_5S = 1024 * 576 * 121
+_VOLUME_1080P_10S = 1920 * 1088 * 297
+
+
 def test_cuda_tile_budget_caps_optimistic_mem_get_info() -> None:
-    assert patch._cuda_tile_budget_bytes(int(29.5 * 1024**3)) == patch._CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES
-    assert patch._cuda_tile_budget_bytes(6 * 1024**3) == 6 * 1024**3
+    # An optimistic post-evict mem_get_info (~29.5 GiB) must not reach the planner, or
+    # it picks a near-full-frame tile and the first NA slab hangs.
+    budget = patch._cuda_tile_budget_bytes(int(29.5 * 1024**3), _VOLUME_540P_5S)
+    assert patch._CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES <= budget < int(9 * 1024**3)
+    # A measurement already under the cap passes through untouched.
+    assert patch._cuda_tile_budget_bytes(6 * 1024**3, _VOLUME_540P_5S) == 6 * 1024**3
+
+
+def test_cuda_tile_budget_grows_with_resident_stage4_cost() -> None:
+    """Stage-4 features are subtracted from the budget before any tile is considered.
+
+    They scale with pixel volume (~4.9 GiB at 1080p/10s), so a flat cap left ~1.1 GiB
+    and decode failed outright. The cap must absorb that cost to keep tile room.
+    """
+    measured = int(29.5 * 1024**3)
+    small = patch._cuda_tile_budget_bytes(measured, _VOLUME_540P_5S)
+    large = patch._cuda_tile_budget_bytes(measured, _VOLUME_1080P_10S)
+    assert large - small > int(4 * 1024**3)
+    assert large <= measured
 
 
 def test_cuda_diffvae_caps_29gib_budget_before_recommend(monkeypatch) -> None:
@@ -134,7 +155,11 @@ def test_cuda_diffvae_caps_29gib_budget_before_recommend(monkeypatch) -> None:
         torch.zeros(1, 128, 61, 18, 32),
         object(),
     )
-    assert captured["free_bytes"] == patch._CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES
+    # 540p x 481 frames: capped well below the optimistic 29.5 GiB, but above the flat
+    # cap by the resident stage-4 cost this workload carries.
+    free_bytes = captured["free_bytes"]
+    assert isinstance(free_bytes, int)
+    assert patch._CUDA_DIFFVAE_TILE_BUDGET_CAP_BYTES < free_bytes < int(12 * 1024**3)
     assert captured["width"] == 1024
     assert captured["height"] == 576
     assert captured["num_frames"] == 481
