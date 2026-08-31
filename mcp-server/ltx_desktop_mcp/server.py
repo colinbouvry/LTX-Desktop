@@ -15,7 +15,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from . import client
+from . import client, media
 from .models import (
     AspectRatio,
     AudioPath,
@@ -381,6 +381,88 @@ async def ltx_backend_status(response_format: ResponseFormat = "markdown") -> st
         gpu = {}
     payload = {"backend_url": client.base_url(), "runtime_policy": policy, "gpu": gpu}
     return _render(payload, response_format, "Backend status")
+
+
+@mcp.tool(
+    name="ltx_extract_shots",
+    title="Split a multi-shot video into one still per shot",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    ),
+)
+async def ltx_extract_shots(
+    video_path: str,
+    scene_threshold: float = media.DEFAULT_SCENE_THRESHOLD,
+    out_dir: str | None = None,
+) -> str:
+    """Recover each shot of a multi-shot generation as a separate still image.
+
+    A multi-shot prompt yields one file containing several angles of the same place.
+    This turns it into a usable scouting pass: one frame per shot, each ready to seed a
+    longer continuous take via ltx_generate_video's image_path.
+
+    Only hard cuts are found. Dissolves score below the threshold and are skipped on
+    purpose -- a dissolve has no single representative frame.
+
+    Args:
+        video_path: Absolute path to the generated video.
+        scene_threshold: Scene-change score counted as a cut (0-1). Lower finds more
+            cuts and more false positives; raise it if gentle camera moves are split.
+        out_dir: Where to write the stills. Defaults to a folder beside the video.
+
+    Returns:
+        One line per shot with its index, timestamp and image path.
+    """
+    try:
+        shots = await asyncio.to_thread(
+            media.extract_shot_frames, video_path, threshold=scene_threshold, out_dir=out_dir
+        )
+    except media.MediaError as exc:
+        raise client.BackendError(str(exc)) from exc
+
+    if len(shots) == 1:
+        return (
+            f"One shot only (no cut above {scene_threshold}). Opening frame: "
+            f"{shots[0]['path']}\n\n"
+            "If the video does contain cuts, lower scene_threshold."
+        )
+    lines = [f"{len(shots)} shots:"]
+    lines.extend(f"- shot {s['shot']} at {s['time_seconds']}s -> {s['path']}" for s in shots)
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="ltx_extract_last_frame",
+    title="Extract a clip's final frame",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    ),
+)
+async def ltx_extract_last_frame(video_path: str, out_dir: str | None = None) -> str:
+    """Take the final frame of a clip, to continue the shot in a new generation.
+
+    Local 2.5 has no Extend, so a longer sequence is built by feeding this frame back in
+    as ltx_generate_video's image_path. Expect drift: colour and sharpness degrade with
+    each hand-off, usually visibly by the third or fourth link.
+
+    Args:
+        video_path: Absolute path to the clip to continue.
+        out_dir: Where to write the still. Defaults to a folder beside the video.
+
+    Returns:
+        The path of the extracted frame.
+    """
+    try:
+        path = await asyncio.to_thread(media.extract_last_frame, video_path, out_dir=out_dir)
+    except media.MediaError as exc:
+        raise client.BackendError(str(exc)) from exc
+    return f"Final frame: {path}\n\nPass it as image_path to continue the shot."
 
 
 def main() -> None:
