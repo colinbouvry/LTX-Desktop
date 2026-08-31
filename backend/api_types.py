@@ -382,6 +382,48 @@ class LtxInsufficientFundsErrorResponse(BaseModel):
 # ============================================================
 
 
+class OutputGenerationParams(BaseModel):
+    """What produced an output, recorded when it was generated.
+
+    Written to a sidecar next to the file so a render started from outside the app --
+    the MCP server, a script -- carries the same provenance as one started in the UI,
+    instead of the client having to probe the file and guess.
+    """
+
+    mode: str
+    prompt: str
+    model: str
+    model_label: str | None = None
+    duration: int | None = None
+    resolution: str
+    aspect_ratio: str
+    fps: int
+    audio: bool
+    camera_motion: str
+    seed: int | None = None
+
+
+class OutputItem(BaseModel):
+    """One generated file sitting in the outputs directory."""
+
+    path: str
+    name: str
+    size_bytes: int
+    # POSIX timestamp; the client formats it. Sorting happens server-side.
+    modified_at: float
+    # Absent for files generated before sidecars existed, or dropped in by hand.
+    generation_params: OutputGenerationParams | None = None
+
+
+class OutputsListResponse(BaseModel):
+    outputs: list[OutputItem]
+    total_count: int
+    has_more: bool
+    next_offset: int | None = None
+    # Echoed so the client can offer "reveal in folder" without guessing the path.
+    outputs_dir: str
+
+
 LTXVideoGenResolution: TypeAlias = Literal["540p", "720p", "1080p", "1440p", "2160p"]
 # 25/30/40 are local-only additions. The API envelope in api_model_specs.py
 # does not list them, so validate_generate_video_request() still rejects them

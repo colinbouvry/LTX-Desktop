@@ -604,6 +604,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/outputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Route List Outputs */
+        get: operations["route_list_outputs_api_outputs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/retake": {
         parameters: {
             query?: never;
@@ -1967,6 +1984,66 @@ export interface components {
             right: number;
             /** Top */
             top: number;
+        };
+        /**
+         * OutputGenerationParams
+         * @description What produced an output, recorded when it was generated.
+         *
+         *     Written to a sidecar next to the file so a render started from outside the app --
+         *     the MCP server, a script -- carries the same provenance as one started in the UI,
+         *     instead of the client having to probe the file and guess.
+         */
+        OutputGenerationParams: {
+            /** Aspect Ratio */
+            aspect_ratio: string;
+            /** Audio */
+            audio: boolean;
+            /** Camera Motion */
+            camera_motion: string;
+            /** Duration */
+            duration?: number | null;
+            /** Fps */
+            fps: number;
+            /** Mode */
+            mode: string;
+            /** Model */
+            model: string;
+            /** Model Label */
+            model_label?: string | null;
+            /** Prompt */
+            prompt: string;
+            /** Resolution */
+            resolution: string;
+            /** Seed */
+            seed?: number | null;
+        };
+        /**
+         * OutputItem
+         * @description One generated file sitting in the outputs directory.
+         */
+        OutputItem: {
+            generation_params?: components["schemas"]["OutputGenerationParams"] | null;
+            /** Modified At */
+            modified_at: number;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** OutputsListResponse */
+        OutputsListResponse: {
+            /** Has More */
+            has_more: boolean;
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Outputs */
+            outputs: components["schemas"]["OutputItem"][];
+            /** Outputs Dir */
+            outputs_dir: string;
+            /** Total Count */
+            total_count: number;
         };
         /** PreprocessingStep */
         PreprocessingStep: {
@@ -3585,6 +3662,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TextEncoderRecommendationResponse"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPErrorResponse"];
+                };
+            };
+        };
+    };
+    route_list_outputs_api_outputs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutputsListResponse"];
                 };
             };
             /** @description Client Error */

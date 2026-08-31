@@ -3698,6 +3698,169 @@
         "title": "OutpaintPads",
         "type": "object"
       },
+      "OutputGenerationParams": {
+        "description": "What produced an output, recorded when it was generated.\n\nWritten to a sidecar next to the file so a render started from outside the app --\nthe MCP server, a script -- carries the same provenance as one started in the UI,\ninstead of the client having to probe the file and guess.",
+        "properties": {
+          "aspect_ratio": {
+            "title": "Aspect Ratio",
+            "type": "string"
+          },
+          "audio": {
+            "title": "Audio",
+            "type": "boolean"
+          },
+          "camera_motion": {
+            "title": "Camera Motion",
+            "type": "string"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "fps": {
+            "title": "Fps",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "model_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Label"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "resolution": {
+            "title": "Resolution",
+            "type": "string"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          }
+        },
+        "required": [
+          "mode",
+          "prompt",
+          "model",
+          "resolution",
+          "aspect_ratio",
+          "fps",
+          "audio",
+          "camera_motion"
+        ],
+        "title": "OutputGenerationParams",
+        "type": "object"
+      },
+      "OutputItem": {
+        "description": "One generated file sitting in the outputs directory.",
+        "properties": {
+          "generation_params": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputGenerationParams"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modified_at": {
+            "title": "Modified At",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "size_bytes",
+          "modified_at"
+        ],
+        "title": "OutputItem",
+        "type": "object"
+      },
+      "OutputsListResponse": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/OutputItem"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "outputs_dir": {
+            "title": "Outputs Dir",
+            "type": "string"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "outputs",
+          "total_count",
+          "has_more",
+          "outputs_dir"
+        ],
+        "title": "OutputsListResponse",
+        "type": "object"
+      },
       "PreprocessingStep": {
         "properties": {
           "params": {
@@ -5966,6 +6129,72 @@
         "summary": "Route Text Encoder Recommendation",
         "tags": [
           "models"
+        ]
+      }
+    },
+    "/api/outputs": {
+      "get": {
+        "operationId": "route_list_outputs_api_outputs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputsListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Route List Outputs",
+        "tags": [
+          "outputs"
         ]
       }
     },

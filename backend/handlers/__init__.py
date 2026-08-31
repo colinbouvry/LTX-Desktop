@@ -13,6 +13,7 @@ from handlers.prompt_enhancement_handler import PromptEnhancementHandler
 from handlers.suggest_gap_prompt_handler import SuggestGapPromptHandler
 from handlers.retake_handler import RetakeHandler
 from handlers.extend_handler import ExtendHandler
+from handlers.outputs_handler import OutputsHandler
 from handlers.runtime_policy_handler import RuntimePolicyHandler
 from handlers.settings_handler import SettingsHandler
 from handlers.text_handler import TextHandler
@@ -31,6 +32,7 @@ __all__ = [
     "SuggestGapPromptHandler",
     "RetakeHandler",
     "ExtendHandler",
+    "OutputsHandler",
     "RuntimePolicyHandler",
     "IcLoraHandler",
     "HuggingFaceAuthHandler",

@@ -19,6 +19,7 @@ from PIL import Image
 from api_types import (
     GenerateVideoCancelledResponse,
     GenerateVideoCompleteResponse,
+    OutputGenerationParams,
     GenerateVideoModelsSpecsResponse,
     GenerateVideoRequest,
     GenerateVideoResponse,
@@ -28,6 +29,7 @@ from api_types import (
     LTXVideoGenResolution,
     VideoCameraMotion,
 )
+from handlers.outputs_handler import write_generation_sidecar
 from runtime_config.ltx_capabilities import LtxAspectRatio, api_caps, local_caps, pixels_for, supports
 from runtime_config.models_scanner import resolve_lora_ref
 from _routes._errors import HTTPError
@@ -150,6 +152,36 @@ class VideoGenerationHandler(StateHandlerBase):
     def _duration_head_ready(self) -> bool:
         model_id = self._active_ltx_model_id()
         return model_id is not None and is_duration_head_ready(self.models_dir, model_id)
+
+    def _record_provenance(self, output_path: str, req: GenerateVideoRequest, *, fps: int) -> None:
+        """Persist what produced this file, beside it.
+
+        These values exist only here. A client reading the folder later can recover fps
+        and duration by probing, but never the prompt, model or mode -- so a render
+        started outside the app would otherwise arrive with no provenance at all.
+        """
+        # Same precedence the request validator uses, so provenance agrees with the
+        # envelope that was checked.
+        mode = (
+            "audio-to-video" if normalize_optional_path(req.audioPath)
+            else "image-to-video" if normalize_optional_path(req.imagePath) or req.keyframes
+            else "text-to-video"
+        )
+        write_generation_sidecar(
+            output_path,
+            OutputGenerationParams(
+                mode=mode,
+                prompt=req.prompt,
+                model=req.model,
+                duration=req.duration,
+                resolution=req.resolution,
+                aspect_ratio=req.aspectRatio,
+                fps=fps,
+                audio=req.audio,
+                camera_motion=req.cameraMotion,
+                seed=req.seed,
+            ),
+        )
 
     def _local_pixels(
         self,
@@ -301,6 +333,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     loras=loras,
                 )
 
+                self._record_provenance(output_path, req, fps=fps)
                 self._generation.complete_generation(output_path)
                 return GenerateVideoCompleteResponse(status="complete", video_path=output_path)
 
@@ -519,6 +552,7 @@ class VideoGenerationHandler(StateHandlerBase):
                 raise GenerationCancelledError()
 
             self._generation.update_progress("complete", 100, total_steps, total_steps)
+            self._record_provenance(str(output_path), req, fps=fps)
             self._generation.complete_generation(str(output_path))
             return GenerateVideoCompleteResponse(status="complete", video_path=str(output_path))
 
@@ -754,6 +788,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     raise GenerationCancelledError()
 
                 self._generation.update_progress("complete", 100, None, None)
+                self._record_provenance(str(output_path), req, fps=req.fps)
                 self._generation.complete_generation(str(output_path))
                 return GenerateVideoCompleteResponse(status="complete", video_path=str(output_path))
             except HTTPError as e:
